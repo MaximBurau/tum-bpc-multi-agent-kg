@@ -65,10 +65,58 @@ class APIClient {
   /**
    * Pipeline operations
    */
-  async runPipeline(config: unknown, input: string) {
+  async runPipeline(
+    taskType: string,
+    limit?: number,
+    prompt?: string,
+    systemPrompt?: string,
+    model?: string,
+    tags?: string[]
+  ) {
     return this.request('/api/pipeline/run', {
       method: 'POST',
-      body: JSON.stringify({ config, input }),
+      body: JSON.stringify({
+        task_type: taskType,
+        limit,
+        prompt,
+        system_prompt: systemPrompt,
+        model,
+        tags,
+      }),
+    });
+  }
+
+  /**
+   * Run history operations
+   */
+  async getRuns(taskType?: string, limit?: number, offset?: number) {
+    const params = new URLSearchParams();
+    if (taskType) params.append('task_type', taskType);
+    if (limit) params.append('limit', limit.toString());
+    if (offset) params.append('offset', offset.toString());
+    
+    const query = params.toString();
+    return this.request(`/api/runs${query ? `?${query}` : ''}`, {
+      method: 'GET',
+    });
+  }
+
+  async getRunById(runId: number) {
+    return this.request(`/api/runs/${runId}`, { method: 'GET' });
+  }
+
+  async deleteRun(runId: number) {
+    return this.request(`/api/runs/${runId}`, { method: 'DELETE' });
+  }
+
+  async getRunStats() {
+    return this.request('/api/stats', { method: 'GET' });
+  }
+
+  async updateRunTags(runId: number, tags: string[]) {
+    return this.request(`/api/runs/${runId}/tags`, {
+      method: 'PATCH',
+      body: JSON.stringify({ tags }),
     });
   }
 
@@ -98,7 +146,14 @@ class APIClient {
    * Knowledge graph operations
    */
   async getKnowledgeGraph() {
-    return this.request('/api/kg', { method: 'GET' });
+    return this.request('/api/kg/graph', { method: 'GET' });
+  }
+
+  async extractKnowledgeGraph(text: string) {
+    return this.request('/api/kg/extract', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
   }
 }
 

@@ -8,7 +8,7 @@ from typing import Optional, List, Type, TypeVar
 from openai import OpenAI
 import instructor
 from pydantic import BaseModel
-from config import config
+from .config import config
 
 # Validate config on import
 config.validate()
@@ -26,7 +26,7 @@ class LLMClient:
     """
     
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-    DEFAULT_MODEL = "openai/gpt-4o"
+    DEFAULT_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
     
     def __init__(
         self,
@@ -50,10 +50,6 @@ class LLMClient:
         self.client = OpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
-            default_headers={
-                "HTTP-Referer": "https://github.com/your-org/tum-bpc-multi-agent-kg",
-                "X-Title": "Multi-Agent Knowledge Graph Construction",
-            }
         )
         
         # Patch client with instructor for structured outputs

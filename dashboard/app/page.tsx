@@ -1,162 +1,225 @@
+"use client";
+
+import { useState } from "react";
+import { apiClient } from "@/lib/api/client";
+
 /**
- * Home page - Dashboard overview
- * 
- * Displays quick stats, recent activity, and provides quick access to main features.
+ * Pipeline Runner - Main evaluation interface
  */
 
-import { ArrowRight, Database, Share2, Bot, Activity, Play } from 'lucide-react';
+interface RunResult {
+  run_id: number;
+  task_type: string;
+  metrics: Record<string, number>;
+  duration_seconds: number;
+  num_examples: number;
+}
 
-export default function Home() {
+export default function PipelineRunner() {
+  const [taskType, setTaskType] = useState<"qa" | "ner">("qa");
+  const [limit, setLimit] = useState<number>(10);
+  const [model, setModel] = useState<string>("meta-llama/Llama-3.1-8B-Instruct");
+  const [systemPrompt, setSystemPrompt] = useState<string>("");
+  const [tags, setTags] = useState<string>("");
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<RunResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleRun = async () => {
+    setIsRunning(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const tagsList = tags.split(",").map(t => t.trim()).filter(t => t);
+      const response = await apiClient.runPipeline(
+        taskType,
+        limit,
+        undefined,
+        systemPrompt || undefined,
+        model,
+        tagsList.length > 0 ? tagsList : undefined
+      );
+      
+      if (response.error) {
+        setError(response.error);
+      } else {
+        setResult(response.data as RunResult);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
   return (
-    <main className="min-h-[calc(100vh-4rem)] p-8 bg-gray-950">
-      <div className="max-w-7xl mx-auto space-y-8">
-        <div className="flex flex-col gap-2">
-          <h1 className="text-4xl font-bold text-white tracking-tight">
-            Dashboard Overview
+    <main className="min-h-[calc(100vh-4rem)] p-6 bg-gray-950">
+      <div className="max-w-5xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold text-white">
+            Pipeline Runner
           </h1>
-          <p className="text-gray-400">
-            Monitor and control your multi-agent knowledge graph system
+          <p className="text-sm text-gray-400">
+            Run evaluation pipelines and measure performance
           </p>
         </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <StatCard
-            title="Total Entities"
-            value="0"
-            description="Extracted entities"
-            icon={<Database className="w-5 h-5 text-blue-400" />}
-            trend="+0% this week"
-          />
-          <StatCard
-            title="Total Relations"
-            value="0"
-            description="Connected triples"
-            icon={<Share2 className="w-5 h-5 text-purple-400" />}
-            trend="+0% this week"
-          />
-          <StatCard
-            title="Active Agents"
-            value="6"
-            description="System agents"
-            icon={<Bot className="w-5 h-5 text-green-400" />}
-            trend="All systems operational"
-          />
+
+        {/* Configuration Panel */}
+        <div className="bg-gray-900/50 border border-gray-800 rounded-md p-4 space-y-4">
+          <h2 className="text-sm font-medium text-gray-300">Configuration</h2>
+
+          {/* Task Type Selection */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-gray-400">
+              Task Type
+            </label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setTaskType("qa")}
+                className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                  taskType === "qa"
+                    ? "bg-gray-700 text-white"
+                    : "bg-gray-800 text-gray-400 hover:bg-gray-750"
+                }`}
+              >
+                Question Answering
+              </button>
+              <button
+                onClick={() => setTaskType("ner")}
+                className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                  taskType === "ner"
+                    ? "bg-gray-700 text-white"
+                    : "bg-gray-800 text-gray-400 hover:bg-gray-750"
+                }`}
+              >
+                Named Entity Recognition
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Model Selection */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-gray-400">
+                Model
+              </label>
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-gray-600"
+              >
+                <option value="meta-llama/Llama-3.1-8B-Instruct">Llama 3.1 8B</option>
+                <option value="openai/gpt-4o">GPT-4o</option>
+                <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+                <option value="qwen/qwen-2.5-72b-instruct">Qwen 2.5 72B</option>
+              </select>
+            </div>
+
+            {/* Limit Input */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-gray-400">
+                Number of Examples
+              </label>
+              <input
+                type="number"
+                value={limit}
+                onChange={(e) => setLimit(parseInt(e.target.value) || 10)}
+                min={1}
+                max={1000}
+                className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-gray-600"
+              />
+            </div>
+          </div>
+
+          {/* System Prompt */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-gray-400">
+              System Prompt (Optional)
+            </label>
+            <textarea
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              rows={3}
+              placeholder="Override default system prompt..."
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-600 font-mono resize-none"
+            />
+          </div>
+
+          {/* Tags */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-gray-400">
+              Tags (comma-separated)
+            </label>
+            <input
+              type="text"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="e.g., baseline, experiment-1, high-quality"
+              className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-600"
+            />
+          </div>
+
+          {/* Run Button */}
+          <button
+            onClick={handleRun}
+            disabled={isRunning}
+            className={`w-full py-2 rounded text-sm font-medium transition-colors ${
+              isRunning
+                ? "bg-gray-800 text-gray-500 cursor-not-allowed"
+                : "bg-gray-700 text-white hover:bg-gray-600"
+            }`}
+          >
+            {isRunning ? "Running..." : "Run Pipeline"}
+          </button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
-            <QuickActions />
+        {/* Error Display */}
+        {error && (
+          <div className="bg-red-950/30 border border-red-900/50 rounded-md p-3">
+            <p className="text-sm text-red-400">{error}</p>
           </div>
-          <div>
-            <RecentActivity />
+        )}
+
+        {/* Results Display */}
+        {result && (
+          <div className="bg-gray-900/50 border border-gray-800 rounded-md p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-medium text-gray-300">Results</h2>
+              <span className="text-xs text-gray-500">
+                Run ID: {result.run_id}
+              </span>
+            </div>
+
+            {/* Metrics Grid */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {Object.entries(result.metrics).map(([key, value]) => (
+                <div
+                  key={key}
+                  className="bg-gray-900 border border-gray-800 rounded p-3"
+                >
+                  <p className="text-xs text-gray-400 capitalize mb-1">
+                    {key.replace(/_/g, " ")}
+                  </p>
+                  <p className="text-lg font-semibold text-white">
+                    {typeof value === "number"
+                      ? value.toFixed(4)
+                      : value}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Run Info */}
+            <div className="flex gap-4 text-xs text-gray-400 pt-2 border-t border-gray-800">
+              <span>Duration: {result.duration_seconds.toFixed(2)}s</span>
+              <span>Examples: {result.num_examples}</span>
+              <span className="capitalize">Task: {result.task_type}</span>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </main>
-  );
-}
-
-interface StatCardProps {
-  title: string;
-  value: string;
-  description: string;
-  icon: React.ReactNode;
-  trend: string;
-}
-
-function StatCard({ title, value, description, icon, trend }: StatCardProps) {
-  return (
-    <div className="group bg-gray-900/50 backdrop-blur-sm p-6 rounded-xl shadow-lg border border-gray-800 hover:border-gray-700 transition-all duration-300">
-      <div className="flex justify-between items-start mb-4">
-        <div className="p-2 bg-gray-800/50 rounded-lg group-hover:bg-gray-800 transition-colors">
-          {icon}
-        </div>
-        <span className="text-xs font-medium text-gray-500 bg-gray-800/50 px-2 py-1 rounded-full">
-          Live
-        </span>
-      </div>
-      <div className="space-y-1">
-        <h3 className="text-sm font-medium text-gray-400">{title}</h3>
-        <p className="text-3xl font-bold text-white tracking-tight">{value}</p>
-      </div>
-      <div className="mt-4 pt-4 border-t border-gray-800">
-        <span className="text-xs text-gray-500">{trend}</span>
-      </div>
-    </div>
-  );
-}
-
-function QuickActions() {
-  return (
-    <div className="bg-gray-900/50 backdrop-blur-sm p-6 rounded-xl shadow-lg border border-gray-800 h-full">
-      <h2 className="text-lg font-semibold text-white mb-6 flex items-center gap-2">
-        <Play className="w-5 h-5 text-blue-500" />
-        Quick Actions
-      </h2>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <ActionButton 
-          href="/pipeline" 
-          label="Run Pipeline" 
-          description="Start a new extraction pipeline"
-          color="blue"
-        />
-        <ActionButton 
-          href="/agents" 
-          label="Manage Agents" 
-          description="Configure agent parameters"
-          color="purple"
-        />
-        <ActionButton 
-          href="/kg-viz" 
-          label="View Graph" 
-          description="Explore knowledge graph"
-          color="green"
-        />
-        <ActionButton 
-          href="/llm" 
-          label="LLM Playground" 
-          description="Test prompts & schemas"
-          color="orange"
-        />
-      </div>
-    </div>
-  );
-}
-
-function ActionButton({ href, label, description, color }: { href: string; label: string; description: string; color: string }) {
-  const colorClasses = {
-    blue: 'hover:border-blue-500/50 hover:bg-blue-500/5',
-    purple: 'hover:border-purple-500/50 hover:bg-purple-500/5',
-    green: 'hover:border-green-500/50 hover:bg-green-500/5',
-    orange: 'hover:border-orange-500/50 hover:bg-orange-500/5',
-  }[color];
-
-  return (
-    <a
-      href={href}
-      className={`group block p-4 rounded-lg border border-gray-800 bg-gray-900 transition-all duration-300 ${colorClasses}`}
-    >
-      <div className="flex items-center justify-between mb-2">
-        <span className="font-medium text-gray-200 group-hover:text-white transition-colors">{label}</span>
-        <ArrowRight className="w-4 h-4 text-gray-600 group-hover:text-gray-300 transition-transform group-hover:translate-x-1" />
-      </div>
-      <p className="text-sm text-gray-500 group-hover:text-gray-400 transition-colors">{description}</p>
-    </a>
-  );
-}
-
-function RecentActivity() {
-  return (
-    <div className="bg-gray-900/50 backdrop-blur-sm p-6 rounded-xl shadow-lg border border-gray-800 h-full">
-      <h2 className="text-lg font-semibold text-white mb-6 flex items-center gap-2">
-        <Activity className="w-5 h-5 text-green-500" />
-        Recent Activity
-      </h2>
-      <div className="space-y-4">
-        <div className="flex items-center justify-center h-48 text-gray-500 text-sm bg-gray-900/50 rounded-lg border border-gray-800 border-dashed">
-          No recent activity
-        </div>
-      </div>
-    </div>
   );
 }
