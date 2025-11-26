@@ -1,20 +1,69 @@
-# src/eval/redocred_re.py
+# src/eval/redocred.py
 
 from __future__ import annotations
 
-from typing import List, Dict, Any, Tuple, Set
+from enum import Enum
+from typing import List, Dict, Any, Tuple, Set, Optional
 from pathlib import Path
 import json
 import string
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from ..llm import LLMClient, Relation
+from ..llm import LLMClient
+
 import instructor
 
 _llm = LLMClient()
 # Patch instructor client to use JSON mode for List[Relation] support
 _llm.instructor_client = instructor.patch(_llm.client, mode=instructor.Mode.JSON)
+
+
+class EntityType(str, Enum):
+    """Coarse entity types used for Re-DocRED-style extraction."""
+
+    PER = "PER"  # Person
+    ORG = "ORG"  # Organization
+    LOC = "LOC"  # Location (geo / political)
+    TIME = "TIME"  # Date / time expressions
+    NUM = "NUM"  # Numeric expressions
+    MISC = "MISC"  # Other named entities
+
+
+class PredictedMention(BaseModel):
+    """One textual mention of an entity in the document."""
+
+    mention_id: str
+    text: str
+    sent_index: Optional[int] = None
+    start_token: Optional[int] = None
+    end_token: Optional[int] = None
+
+
+class PredictedEntity(BaseModel):
+    """Canonical entity plus all its mentions."""
+
+    entity_id: str
+    type: EntityType
+    canonical_name: str
+    mentions: List[PredictedMention] = Field(default_factory=list)
+
+
+class PredictedRelation(BaseModel):
+    """One relation instance between two entities in the closed DocRED schema."""
+
+    head_entity_id: str
+    tail_entity_id: str
+    # Keep relation_id as a string and enforce allowed values via the prompt
+    relation_id: str
+    evidence_sentences: List[int] = Field(default_factory=list)
+
+
+class KGPrediction(BaseModel):
+    """Full LLM prediction for one document: entities + relations."""
+
+    entities: List[PredictedEntity] = Field(default_factory=list)
+    relations: List[PredictedRelation] = Field(default_factory=list)
 
 
 def _normalize_text(text: str) -> str:
@@ -54,6 +103,24 @@ def load_redocred(path: str) -> List[Dict[str, Any]]:
             raise ValueError("This Re-DocRED file has no 'labels'; use a train/dev file.")
 
     return docs
+
+
+def load_rel_info() -> Dict[str, str]:
+    """Load mapping from relation id (e.g. 'P27') to human-readable label.
+
+    This is used only for prompting; evaluation is still done on raw ids.
+    """
+    rel_info_path = (
+        Path(__file__).parent.parent.parent
+        / "data"
+        / "eval"
+        / "redocred"
+        / "raw"
+        / "rel_info.json"
+    )
+
+    with open(rel_info_path, "r", encoding="utf8") as f:
+        return json.load(f)
 
 
 def build_gold_triples(doc: Dict[str, Any]) -> Set[Tuple[str, str, str]]:
@@ -105,57 +172,122 @@ def build_gold_triples(doc: Dict[str, Any]) -> Set[Tuple[str, str, str]]:
 def extract_relations_llm(
     text: str,
     relation_labels: List[str],
+    rel_descriptions: Optional[Dict[str, str]] = None,
 ) -> List[Tuple[str, str, str]]:
-    """
-    Run a dedicated RE prompt on plain text using LLM structured output.
+    """Run a dedicated RE prompt on plain text using LLM structured output.
 
-    Uses the RelationList schema from llm.py:
-      relations: List[Relation] where
-        - subject: surface form in the text
-        - predicate: one of the allowed relation labels (strings from Re-DocRED)
-        - object: surface form in the text
+    Uses the KGPrediction schema defined above:
+      - entities: canonical entities with mentions
+      - relations: links between entity_ids using relation_ids from Re-DocRED
+
+    We then collapse this back down to a set of triples:
+      (normalized_subject_surface_text, relation_label, normalized_object_surface_text)
+    for comparison against gold triples.
     """
-    # Keep prompt deterministic + constrained
-    allowed_relations_str = "\n".join(f"- {r}" for r in sorted(set(relation_labels)))
+    # Deduplicate and sort allowed relation labels (e.g. ["P17", "P27", ...])
+    allowed_ids = sorted(set(relation_labels))
+
+    if rel_descriptions:
+        allowed_relations_str = "\n".join(
+            f"- {r}: {rel_descriptions.get(r, '')}" for r in allowed_ids
+        )
+    else:
+        allowed_relations_str = "\n".join(f"- {r}" for r in allowed_ids)
 
     system_prompt = (
-        "You are an expert in document-level relation extraction.\n\n"
+        "You are an information extraction model that builds a small knowledge graph from a document.\n\n"
+        "Schema:\n"
+        "- Entity types (choose exactly one for each entity):\n"
+        "  PER: Person (individual human)\n"
+        "  ORG: Organization (companies, institutions, teams, parties, etc.)\n"
+        "  LOC: Location (countries, cities, regions, buildings, rivers, mountains, etc.)\n"
+        "  TIME: Dates and time expressions (years, specific dates, periods)\n"
+        "  NUM: Numeric expressions (numbers, quantities, percentages, monetary amounts)\n"
+        "  MISC: Other named entities that do not clearly fit above.\n\n"
+        "- Relation types (closed world): you MUST choose relation_id from this list:\n"
+        f"{allowed_relations_str}\n\n"
         "Task:\n"
-        "- Read the given document.\n"
-        "- Identify all factual relations between named entities.\n"
-        "- Only use the relation labels from the allowed list.\n"
-        "- Do NOT invent entities or relations that are not clearly stated.\n"
-        "- Each relation should be a triple: (subject, predicate, object).\n"
-        "- The subject and object must be exact contiguous spans from the text.\n"
-        "- The predicate must be exactly one of the allowed relation labels.\n"
-        "- Return each unique relation ONLY ONCE. Do NOT repeat relations.\n"
-        "- Keep the output concise - extract only the most important relations.\n\n"
-        "Allowed relation labels:\n"
-        f"{allowed_relations_str}\n"
+        "1) Read the document text.\n"
+        "2) Identify named entities and group mentions that refer to the same real-world entity.\n"
+        "3) Assign each entity an entity type from {PER, ORG, LOC, TIME, NUM, MISC}.\n"
+        "4) Predict factual relations between entities using ONLY the allowed relation_ids.\n"
+        "   - Only output a relation if it is directly supported by the document text.\n"
+        "   - Do NOT rely on external world knowledge.\n"
+        "   - For each relation, also return evidence_sentences: indices of sentences that justify it (0-based).\n\n"
+        "Output format:\n"
+        "Return a single JSON object with the following structure (no extra fields):\n"
+        "{\n"
+        "  \"entities\": [\n"
+        "    {\n"
+        "      \"entity_id\": \"string, e.g. 'E1'\",\n"
+        "      \"type\": \"one of: PER, ORG, LOC, TIME, NUM, MISC\",\n"
+        "      \"canonical_name\": \"short canonical name for the entity\",\n"
+        "      \"mentions\": [\n"
+        "        {\n"
+        "          \"mention_id\": \"string, e.g. 'M1'\",\n"
+        "          \"text\": \"exact text span of this mention\",\n"
+        "          \"sent_index\": 0,\n"
+        "          \"start_token\": 0,\n"
+        "          \"end_token\": 1\n"
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  ],\n"
+        "  \"relations\": [\n"
+        "    {\n"
+        "      \"head_entity_id\": \"entity_id of the subject\",\n"
+        "      \"tail_entity_id\": \"entity_id of the object\",\n"
+        "      \"relation_id\": \"one of the allowed relation ids, e.g. 'P27'\",\n"
+        "      \"evidence_sentences\": [0]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        "If there are no entities, return \"entities\": [].\n"
+        "If there are no supported relations, return \"relations\": [].\n"
+        "The output MUST be valid JSON and follow the schema exactly."
     )
 
-    result: List[Relation] = _llm.get_structured_output(
+    pred_kg: KGPrediction = _llm.get_structured_output(
         prompt=text,
-        response_model=List[Relation],
+        response_model=KGPrediction,
         system_prompt=system_prompt,
         temperature=0.0,
-        max_tokens=2000,  # Limit output to prevent repetition
+        max_tokens=3500,
     )
 
+    # Map entity_id -> canonical surface form
+    entity_map: Dict[str, PredictedEntity] = {e.entity_id: e for e in pred_kg.entities}
+
     triples: List[Tuple[str, str, str]] = []
-    seen = set()  # Deduplicate
-    for rel in result:
-        if not rel.subject or not rel.object or not rel.predicate:
+    seen: Set[Tuple[str, str, str]] = set()
+    allowed_set = set(allowed_ids)
+
+    for rel in pred_kg.relations:
+        # Enforce closed-world relation set
+        if rel.relation_id not in allowed_set:
             continue
-        subj = _normalize_text(rel.subject)
-        obj = _normalize_text(rel.object)
-        pred = rel.predicate.strip()
+
+        head = entity_map.get(rel.head_entity_id)
+        tail = entity_map.get(rel.tail_entity_id)
+        if head is None or tail is None:
+            continue
+
+        # Prefer canonical_name; fall back to first mention text
+        subj_name = head.canonical_name or (head.mentions[0].text if head.mentions else "")
+        obj_name = tail.canonical_name or (tail.mentions[0].text if tail.mentions else "")
+
+        subj = _normalize_text(subj_name)
+        obj = _normalize_text(obj_name)
+        pred = rel.relation_id.strip()
+
         if not subj or not obj or not pred:
             continue
+
         triple = (subj, pred, obj)
-        if triple not in seen:
-            seen.add(triple)
-            triples.append(triple)
+        if triple in seen:
+            continue
+        seen.add(triple)
+        triples.append(triple)
 
     return triples
 
@@ -188,6 +320,8 @@ def evaluate_redocred_re(
     if limit is not None:
         docs = docs[:limit]
 
+    rel_info = load_rel_info()
+
     # Collect all relation labels present in the (sub-)dataset
     all_rel_labels = sorted(
         {lab["r"] for doc in docs for lab in doc.get("labels", [])}
@@ -206,7 +340,7 @@ def evaluate_redocred_re(
         text = " ".join(" ".join(sent) for sent in sents)
 
         # 3) LLM prediction
-        pred_triples_list = extract_relations_llm(text, all_rel_labels)
+        pred_triples_list = extract_relations_llm(text, all_rel_labels, rel_descriptions=rel_info)
         pred_triples = set(pred_triples_list)
 
         # 4) Set-based counts
@@ -231,3 +365,13 @@ def evaluate_redocred_re(
         "recall": recall,
         "f1": f1,
     }
+
+# Explanation:
+# The file was updated to use a richer Pydantic schema for entities and relations,
+# with explicit entity types and relation structures.
+# The LLM prompt was enhanced to describe the schema and allowed relations more clearly,
+# including relation descriptions loaded from rel_info.json.
+# The extract_relations_llm function now returns structured entity/relation predictions,
+# which are then normalized and converted to triples for evaluation.
+# The evaluation function loads relation descriptions once and passes them to the extractor,
+# preserving the original evaluation API and output format.
