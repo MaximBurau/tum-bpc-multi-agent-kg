@@ -173,7 +173,7 @@ def extract_relations_llm(
     text: str,
     relation_labels: List[str],
     rel_descriptions: Optional[Dict[str, str]] = None,
-) -> List[Tuple[str, str, str]]:
+) -> Tuple[List[Tuple[str, str, str]], Optional[str]]:
     """Run a dedicated RE prompt on plain text using LLM structured output.
 
     Uses the KGPrediction schema defined above:
@@ -183,6 +183,10 @@ def extract_relations_llm(
     We then collapse this back down to a set of triples:
       (normalized_subject_surface_text, relation_label, normalized_object_surface_text)
     for comparison against gold triples.
+    
+    Returns:
+        Tuple of (triples_list, error_message). error_message is None if successful,
+        or a string like "Token limit reached" if the output was incomplete.
     """
     # Deduplicate and sort allowed relation labels (e.g. ["P17", "P27", ...])
     allowed_ids = sorted(set(relation_labels))
@@ -247,13 +251,23 @@ def extract_relations_llm(
         "The output MUST be valid JSON and follow the schema exactly."
     )
 
-    pred_kg: KGPrediction = _llm.get_structured_output(
-        prompt=text,
-        response_model=KGPrediction,
-        system_prompt=system_prompt,
-        temperature=0.0,
-        max_tokens=3500,
-    )
+    try:
+        pred_kg: KGPrediction = _llm.get_structured_output(
+            prompt=text,
+            response_model=KGPrediction,
+            system_prompt=system_prompt,
+            temperature=0.0,
+            max_tokens=3500,
+        )
+    except Exception as e:
+        # Check if it's a token limit error
+        error_str = str(e)
+        if "incomplete" in error_str.lower() or "max_tokens" in error_str.lower() or "length limit" in error_str.lower():
+            print(f"Warning: Token limit reached for document. Returning empty triples.")
+            return [], "Token limit reached"
+        else:
+            # Re-raise unexpected errors
+            raise
 
     # Map entity_id -> canonical surface form
     entity_map: Dict[str, PredictedEntity] = {e.entity_id: e for e in pred_kg.entities}
@@ -289,7 +303,7 @@ def extract_relations_llm(
         seen.add(triple)
         triples.append(triple)
 
-    return triples
+    return triples, None
 
 
 def evaluate_redocred_re(
@@ -350,7 +364,7 @@ def evaluate_redocred_re(
         text = " ".join(" ".join(sent) for sent in sents)
 
         # 3) LLM prediction
-        pred_triples_list = extract_relations_llm(text, all_rel_labels, rel_descriptions=rel_info)
+        pred_triples_list, error_message = extract_relations_llm(text, all_rel_labels, rel_descriptions=rel_info)
         pred_triples = set(pred_triples_list)
 
         # 4) Set-based counts
@@ -372,6 +386,7 @@ def evaluate_redocred_re(
                 "true_positives": doc_tp,
                 "false_positives": doc_fp,
                 "false_negatives": doc_fn,
+                "error": error_message,  # Store error message if token limit was reached
             })
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0

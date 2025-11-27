@@ -22,6 +22,7 @@ interface RunResult {
       true_positives: number;
       false_positives: number;
       false_negatives: number;
+      error?: string;
     }>;
   };
 }
@@ -273,6 +274,13 @@ export default function PipelineRunner() {
                               <span className="text-yellow-400">FN: {fn.length}</span>
                             </div>
                           </div>
+
+                          {/* Error Message */}
+                          {doc.error && (
+                            <div className="bg-yellow-900/30 border border-yellow-700 rounded p-2">
+                              <p className="text-xs text-yellow-400 font-medium">⚠️ {doc.error}</p>
+                            </div>
+                          )}
 
                           {/* Text */}
                           <div>

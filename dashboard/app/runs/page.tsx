@@ -19,7 +19,18 @@ interface Run {
   num_examples: number;
   metadata: Record<string, unknown> | null;
   tags: string[] | null;
-  outputs: Record<string, unknown> | null;
+  outputs: {
+    doc_details?: Array<{
+      doc_index: number;
+      text: string;
+      predicted_triples: Array<[string, string, string]>;
+      gold_triples: Array<[string, string, string]>;
+      true_positives: number;
+      false_positives: number;
+      false_negatives: number;
+      error?: string;
+    }>;
+  } | null;
 }
 
 export default function RunsHistory() {
@@ -394,6 +405,13 @@ export default function RunsHistory() {
                           <span className="text-yellow-400">FN: {doc.false_negatives}</span>
                         </div>
                       </div>
+                      
+                      {/* Error Message */}
+                      {doc.error && (
+                        <div className="bg-yellow-900/30 border border-yellow-700 rounded p-2">
+                          <p className="text-xs text-yellow-400 font-medium">⚠️ {doc.error}</p>
+                        </div>
+                      )}
                       
                       {/* Text */}
                       <div>
