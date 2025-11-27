@@ -148,6 +148,16 @@ export default function RunsHistory() {
             >
               NER
             </button>
+            <button
+              onClick={() => setFilterTaskType("redocred")}
+              className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                filterTaskType === "redocred"
+                  ? "bg-gray-700 text-white"
+                  : "bg-gray-800 text-gray-400 hover:bg-gray-750"
+              }`}
+            >
+              ReDocRED
+            </button>
           </div>
         </div>
 
@@ -369,8 +379,83 @@ export default function RunsHistory() {
               </div>
             )}
 
-            {/* Outputs */}
-            {selectedRun.outputs && (
+            {/* ReDocRED Detailed Results */}
+            {selectedRun.task_type === "redocred" && selectedRun.outputs?.doc_details && (
+              <div className="space-y-4">
+                <h3 className="text-xs font-medium text-gray-400">Document Details</h3>
+                <div className="space-y-4 max-h-[600px] overflow-y-auto">
+                  {(selectedRun.outputs.doc_details as any[]).map((doc: any, idx: number) => (
+                    <div key={idx} className="bg-gray-900 border border-gray-800 rounded p-3 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-gray-300">Document #{doc.doc_index}</span>
+                        <div className="flex gap-2 text-xs">
+                          <span className="text-green-400">TP: {doc.true_positives}</span>
+                          <span className="text-red-400">FP: {doc.false_positives}</span>
+                          <span className="text-yellow-400">FN: {doc.false_negatives}</span>
+                        </div>
+                      </div>
+                      
+                      {/* Text */}
+                      <div>
+                        <p className="text-xs text-gray-500 mb-1">Text:</p>
+                        <div className="bg-gray-950 border border-gray-800 rounded p-2 text-xs text-gray-300 max-h-32 overflow-y-auto">
+                          {doc.text || "N/A"}
+                        </div>
+                      </div>
+
+                      {/* Predicted Triples */}
+                      <div>
+                        <p className="text-xs text-gray-500 mb-1">
+                          Predicted Triples ({doc.predicted_triples?.length || 0}):
+                        </p>
+                        <div className="bg-gray-950 border border-gray-800 rounded p-2 max-h-40 overflow-y-auto space-y-1">
+                          {doc.predicted_triples && doc.predicted_triples.length > 0 ? (
+                            doc.predicted_triples.map((triple: any[], tIdx: number) => (
+                              <div key={tIdx} className="text-xs text-gray-300 font-mono">
+                                <span className="text-blue-400">({triple[0]}</span>
+                                <span className="text-gray-500">, </span>
+                                <span className="text-purple-400">{triple[1]}</span>
+                                <span className="text-gray-500">, </span>
+                                <span className="text-green-400">{triple[2]}</span>
+                                <span className="text-gray-500">)</span>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-xs text-gray-600">No predicted triples</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Gold Triples */}
+                      <div>
+                        <p className="text-xs text-gray-500 mb-1">
+                          Gold Triples ({doc.gold_triples?.length || 0}):
+                        </p>
+                        <div className="bg-gray-950 border border-gray-800 rounded p-2 max-h-40 overflow-y-auto space-y-1">
+                          {doc.gold_triples && doc.gold_triples.length > 0 ? (
+                            doc.gold_triples.map((triple: any[], tIdx: number) => (
+                              <div key={tIdx} className="text-xs text-gray-300 font-mono">
+                                <span className="text-blue-400">({triple[0]}</span>
+                                <span className="text-gray-500">, </span>
+                                <span className="text-purple-400">{triple[1]}</span>
+                                <span className="text-gray-500">, </span>
+                                <span className="text-green-400">{triple[2]}</span>
+                                <span className="text-gray-500">)</span>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-xs text-gray-600">No gold triples</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Outputs (for non-ReDocRED tasks) */}
+            {selectedRun.outputs && selectedRun.task_type !== "redocred" && (
               <div className="space-y-2">
                 <h3 className="text-xs font-medium text-gray-400">Outputs</h3>
                 <pre className="bg-gray-900 border border-gray-800 rounded p-3 text-xs text-gray-300 overflow-x-auto max-h-96">
