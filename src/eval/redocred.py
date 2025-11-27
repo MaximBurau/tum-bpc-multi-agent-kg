@@ -295,7 +295,8 @@ def extract_relations_llm(
 def evaluate_redocred_re(
     path: str | None = None,
     limit: int | None = None,
-) -> Dict[str, float]:
+    return_details: bool = False,
+) -> Dict[str, Any]:
     """
     Evaluate relation extraction quality of a *standalone LLM-based RE* on Re-DocRED.
 
@@ -310,6 +311,14 @@ def evaluate_redocred_re(
       5. Compare predicted vs gold triples as sets of
          (normalized_subject, relation_label, normalized_object).
          -> micro precision / recall / F1.
+
+    Args:
+        path: Path to Re-DocRED JSON file
+        limit: Limit number of documents to evaluate
+        return_details: If True, return per-document details (text, predicted triples, gold triples)
+
+    Returns:
+        Dictionary with metrics and optionally detailed per-document results
     """
     if path is None:    
         path = str(
@@ -330,8 +339,9 @@ def evaluate_redocred_re(
     tp = 0
     fp = 0
     fn = 0
+    doc_details = [] if return_details else None
 
-    for doc in docs:
+    for doc_idx, doc in enumerate(docs):
         # 1) Build gold triples
         gold_triples = build_gold_triples(doc)
 
@@ -344,9 +354,25 @@ def evaluate_redocred_re(
         pred_triples = set(pred_triples_list)
 
         # 4) Set-based counts
-        tp += len(pred_triples & gold_triples)
-        fp += len(pred_triples - gold_triples)
-        fn += len(gold_triples - pred_triples)
+        doc_tp = len(pred_triples & gold_triples)
+        doc_fp = len(pred_triples - gold_triples)
+        doc_fn = len(gold_triples - pred_triples)
+        
+        tp += doc_tp
+        fp += doc_fp
+        fn += doc_fn
+
+        # Store per-document details if requested
+        if return_details:
+            doc_details.append({
+                "doc_index": doc_idx,
+                "text": text,
+                "predicted_triples": [list(t) for t in pred_triples_list],  # Convert tuples to lists for JSON
+                "gold_triples": [list(t) for t in gold_triples],  # Convert tuples to lists for JSON
+                "true_positives": doc_tp,
+                "false_positives": doc_fp,
+                "false_negatives": doc_fn,
+            })
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
@@ -356,7 +382,7 @@ def evaluate_redocred_re(
         else 0.0
     )
 
-    return {
+    result = {
         "num_docs": float(len(docs)),
         "true_positives": float(tp),
         "false_positives": float(fp),
@@ -365,6 +391,11 @@ def evaluate_redocred_re(
         "recall": recall,
         "f1": f1,
     }
+
+    if return_details:
+        result["doc_details"] = doc_details
+
+    return result
 
 # Explanation:
 # The file was updated to use a richer Pydantic schema for entities and relations,
