@@ -192,6 +192,7 @@ class PipelineRunResponse(BaseModel):
     metrics: Dict[str, Any]
     duration_seconds: float
     num_examples: int
+    outputs: Optional[Dict[str, Any]] = None
 
 @app.post("/api/pipeline/run", response_model=PipelineRunResponse)
 async def run_pipeline(request: PipelineRunRequest):
@@ -201,6 +202,7 @@ async def run_pipeline(request: PipelineRunRequest):
     """
     try:
         start_time = time.time()
+        outputs = None
         
         if request.task_type == "qa":
             from src.eval.squad import evaluate_squad
@@ -210,6 +212,14 @@ async def run_pipeline(request: PipelineRunRequest):
             from src.eval.conll2003_ner import evaluate_conll2003_ner
             metrics = evaluate_conll2003_ner(limit=request.limit)
             num_examples = metrics.get("num_examples", 0)
+        elif request.task_type == "redocred":
+            from src.eval.redocred import evaluate_redocred_re
+            result = evaluate_redocred_re(limit=request.limit, return_details=True)
+            # Separate metrics from detailed outputs
+            metrics = {k: v for k, v in result.items() if k != "doc_details"}
+            num_examples = metrics.get("num_docs", 0)
+            # Store detailed outputs separately
+            outputs = {"doc_details": result.get("doc_details", [])}
         else:
             raise HTTPException(status_code=400, detail=f"Unknown task type: {request.task_type}")
         
@@ -225,6 +235,7 @@ async def run_pipeline(request: PipelineRunRequest):
             duration_seconds=duration,
             num_examples=num_examples,
             tags=request.tags,
+            outputs=outputs,
         )
         
         return PipelineRunResponse(
@@ -233,6 +244,7 @@ async def run_pipeline(request: PipelineRunRequest):
             metrics=metrics,
             duration_seconds=duration,
             num_examples=num_examples,
+            outputs=outputs,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
