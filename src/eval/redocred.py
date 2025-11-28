@@ -11,6 +11,7 @@ import string
 from pydantic import BaseModel, Field
 
 from ..llm import LLMClient
+from ..agents.base import BaseAgent
 
 import instructor
 
@@ -269,12 +270,33 @@ def extract_relations_llm(
             # Re-raise unexpected errors
             raise
 
+    # Convert KGPrediction to triples using shared helper function
+    triples = _kgprediction_to_triples(pred_kg, allowed_ids)
+    return triples, None
+
+
+def _kgprediction_to_triples(
+    pred_kg: KGPrediction,
+    relation_labels: List[str],
+) -> List[Tuple[str, str, str]]:
+    """
+    Convert a KGPrediction to a list of normalized triples.
+    
+    This is a helper function used by both extract_relations_llm and extract_relations_with_agent.
+    
+    Args:
+        pred_kg: KGPrediction with entities and relations
+        relation_labels: List of allowed relation IDs (for filtering)
+    
+    Returns:
+        List of (subject, relation_id, object) triples
+    """
     # Map entity_id -> canonical surface form
     entity_map: Dict[str, PredictedEntity] = {e.entity_id: e for e in pred_kg.entities}
 
     triples: List[Tuple[str, str, str]] = []
     seen: Set[Tuple[str, str, str]] = set()
-    allowed_set = set(allowed_ids)
+    allowed_set = set(relation_labels)
 
     for rel in pred_kg.relations:
         # Enforce closed-world relation set
@@ -303,6 +325,46 @@ def extract_relations_llm(
         seen.add(triple)
         triples.append(triple)
 
+    return triples
+
+
+def extract_relations_with_agent(
+    text: str,
+    agent: BaseAgent,
+    relation_labels: List[str],
+    rel_descriptions: Optional[Dict[str, str]] = None,
+) -> Tuple[List[Tuple[str, str, str]], Optional[str]]:
+    """
+    Extract relations from text using an agent.
+    
+    The agent should return a KGPrediction when called with the text.
+    This function handles the conversion to triples and error handling.
+    
+    Args:
+        text: Document text to extract relations from
+        agent: Agent that implements run() and returns KGPrediction
+        relation_labels: List of allowed relation IDs (for filtering)
+        rel_descriptions: Optional relation descriptions (not used here, but kept for API consistency)
+    
+    Returns:
+        Tuple of (triples_list, error_message). error_message is None if successful,
+        or a string like "Token limit reached" if the output was incomplete.
+    """
+    try:
+        # Call the agent - it should return a KGPrediction
+        pred_kg: KGPrediction = agent.run(text, temperature=0.0, max_tokens=3500)
+    except Exception as e:
+        # Check if it's a token limit error
+        error_str = str(e)
+        if "incomplete" in error_str.lower() or "max_tokens" in error_str.lower() or "length limit" in error_str.lower():
+            print(f"Warning: Token limit reached for document. Returning empty triples.")
+            return [], "Token limit reached"
+        else:
+            # Re-raise unexpected errors
+            raise
+
+    # Convert KGPrediction to triples
+    triples = _kgprediction_to_triples(pred_kg, relation_labels)
     return triples, None
 
 
@@ -310,9 +372,10 @@ def evaluate_redocred_re(
     path: str | None = None,
     limit: int | None = None,
     return_details: bool = False,
+    agent: Optional[BaseAgent] = None,
 ) -> Dict[str, Any]:
     """
-    Evaluate relation extraction quality of a *standalone LLM-based RE* on Re-DocRED.
+    Evaluate relation extraction quality on Re-DocRED using an agent or direct LLM call.
 
     Pipeline:
       1. Load Re-DocRED docs from JSON.
@@ -320,8 +383,8 @@ def evaluate_redocred_re(
            - plain-text document from 'sents'
            - gold triples from 'vertexSet' + 'labels'
       3. Build the global list of relation labels present in the dataset
-         and feed them to the LLM as allowed predicates.
-      4. Run extract_relations_llm(text) → predicted triples.
+         and feed them to the LLM/agent as allowed predicates.
+      4. Run extraction (via agent or direct LLM) → predicted triples.
       5. Compare predicted vs gold triples as sets of
          (normalized_subject, relation_label, normalized_object).
          -> micro precision / recall / F1.
@@ -330,6 +393,9 @@ def evaluate_redocred_re(
         path: Path to Re-DocRED JSON file
         limit: Limit number of documents to evaluate
         return_details: If True, return per-document details (text, predicted triples, gold triples)
+        agent: Optional agent to use for extraction. If None, uses direct LLM call (extract_relations_llm).
+               If provided, uses extract_relations_with_agent. If agent is None, a default
+               VanillaRelationExtractionAgent will be created automatically.
 
     Returns:
         Dictionary with metrics and optionally detailed per-document results
@@ -350,10 +416,20 @@ def evaluate_redocred_re(
         {lab["r"] for doc in docs for lab in doc.get("labels", [])}
     )
 
+    # If no agent provided, create a default VanillaRelationExtractionAgent
+    if agent is None:
+        from ..agents.vanilla_re_agent import VanillaRelationExtractionAgent
+        agent = VanillaRelationExtractionAgent(
+            relation_labels=all_rel_labels,
+            rel_descriptions=rel_info
+        )
+
     tp = 0
     fp = 0
     fn = 0
     doc_details = [] if return_details else None
+    num_evaluated_docs = 0  # Track successfully evaluated documents (excluding token limit errors)
+    skipped_docs = 0  # Track documents skipped due to token limit
 
     for doc_idx, doc in enumerate(docs):
         # 1) Build gold triples
@@ -363,11 +439,20 @@ def evaluate_redocred_re(
         sents = doc["sents"]
         text = " ".join(" ".join(sent) for sent in sents)
 
-        # 3) LLM prediction
-        pred_triples_list, error_message = extract_relations_llm(text, all_rel_labels, rel_descriptions=rel_info)
+        # 3) Extract relations using agent
+        pred_triples_list, error_message = extract_relations_with_agent(
+            text, agent, all_rel_labels, rel_descriptions=rel_info
+        )
+        
+        # 4) Skip document if token limit was reached
+        if error_message and ("token limit" in error_message.lower() or "max_tokens" in error_message.lower()):
+            print(f"Skipping document {doc_idx + 1} due to token limit error. Continuing with next document.")
+            skipped_docs += 1
+            continue  # Skip this document and move to next one (don't store any info)
+        
         pred_triples = set(pred_triples_list)
 
-        # 4) Set-based counts
+        # 5) Set-based counts (only for successfully evaluated documents)
         doc_tp = len(pred_triples & gold_triples)
         doc_fp = len(pred_triples - gold_triples)
         doc_fn = len(gold_triples - pred_triples)
@@ -375,6 +460,7 @@ def evaluate_redocred_re(
         tp += doc_tp
         fp += doc_fp
         fn += doc_fn
+        num_evaluated_docs += 1  # Count this as successfully evaluated
 
         # Store per-document details if requested
         if return_details:
@@ -386,7 +472,7 @@ def evaluate_redocred_re(
                 "true_positives": doc_tp,
                 "false_positives": doc_fp,
                 "false_negatives": doc_fn,
-                "error": error_message,  # Store error message if token limit was reached
+                "error": error_message,  # Store error message if any (should be None for successful extractions)
             })
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
@@ -398,13 +484,15 @@ def evaluate_redocred_re(
     )
 
     result = {
-        "num_docs": float(len(docs)),
-        "true_positives": float(tp),
-        "false_positives": float(fp),
-        "false_negatives": float(fn),
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
+        "num_docs": int(num_evaluated_docs),  # Only count successfully evaluated documents
+        "num_docs_total": int(len(docs)),  # Total documents processed (including skipped)
+        "num_docs_skipped": int(skipped_docs),  # Number of documents skipped due to token limit
+        "true_positives": int(tp),
+        "false_positives": int(fp),
+        "false_negatives": int(fn),
+        "precision": precision,  # Statistics: keep as float
+        "recall": recall,  # Statistics: keep as float
+        "f1": f1,  # Statistics: keep as float
     }
 
     if return_details:
