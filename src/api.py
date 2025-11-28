@@ -246,8 +246,18 @@ async def run_pipeline(request: PipelineRunRequest):
             num_examples=num_examples,
             outputs=outputs,
         )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_traceback = traceback.format_exc()
+        error_message = f"{type(e).__name__}: {str(e)}"
+        print(f"ERROR in run_pipeline: {error_message}")
+        print(f"Full traceback:\n{error_traceback}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"{error_message}\n\nCheck server logs for full traceback."
+        )
 
 
 # Run History Endpoints
