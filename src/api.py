@@ -212,12 +212,12 @@ async def run_pipeline(request: PipelineRunRequest):
             from src.eval.conll2003_ner import evaluate_conll2003_ner
             metrics = evaluate_conll2003_ner(limit=request.limit)
             num_examples = metrics.get("num_examples", 0)
-        elif request.task_type == "redocred":
+        elif request.task_type == "intrinsic_eval":
             from src.eval.redocred import evaluate_redocred_re
             result = evaluate_redocred_re(limit=request.limit, return_details=True)
             # Separate metrics from detailed outputs
             metrics = {k: v for k, v in result.items() if k != "doc_details"}
-            num_examples = metrics.get("num_docs", 0)
+            num_examples = request.limit  # Use the user-specified limit as num_examples
             # Store detailed outputs separately
             outputs = {"doc_details": result.get("doc_details", [])}
         else:

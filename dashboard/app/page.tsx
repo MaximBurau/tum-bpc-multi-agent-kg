@@ -28,7 +28,7 @@ interface RunResult {
 }
 
 export default function PipelineRunner() {
-  const [taskType, setTaskType] = useState<"qa" | "ner" | "redocred">("qa");
+  const [taskType, setTaskType] = useState<"qa" | "ner" | "intrinsic_eval">("qa");
   const [limit, setLimit] = useState<number>(10);
   const [model, setModel] = useState<string>("meta-llama/Llama-3.1-8B-Instruct");
   const [systemPrompt, setSystemPrompt] = useState<string>("");
@@ -111,14 +111,14 @@ export default function PipelineRunner() {
                 Named Entity Recognition
               </button>
               <button
-                onClick={() => setTaskType("redocred")}
+                onClick={() => setTaskType("intrinsic_eval")}
                 className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
-                  taskType === "redocred"
+                  taskType === "intrinsic_eval"
                     ? "bg-gray-700 text-white"
                     : "bg-gray-800 text-gray-400 hover:bg-gray-750"
                 }`}
               >
-                ReDocRED (RE)
+                Intrinsic Eval (ReDocRED)
               </button>
             </div>
           </div>

@@ -160,14 +160,14 @@ export default function RunsHistory() {
               NER
             </button>
             <button
-              onClick={() => setFilterTaskType("redocred")}
+              onClick={() => setFilterTaskType("intrinsic_eval")}
               className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
-                filterTaskType === "redocred"
+                filterTaskType === "intrinsic_eval"
                   ? "bg-gray-700 text-white"
                   : "bg-gray-800 text-gray-400 hover:bg-gray-750"
               }`}
             >
-              ReDocRED
+              Intrinsic Eval
             </button>
           </div>
         </div>
