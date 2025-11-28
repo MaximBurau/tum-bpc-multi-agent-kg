@@ -218,21 +218,26 @@ export default function PipelineRunner() {
 
             {/* Metrics Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {Object.entries(result.metrics).map(([key, value]) => (
-                <div
-                  key={key}
-                  className="bg-gray-900 border border-gray-800 rounded p-3"
-                >
-                  <p className="text-xs text-gray-400 capitalize mb-1">
-                    {key.replace(/_/g, " ")}
-                  </p>
-                  <p className="text-lg font-semibold text-white">
-                    {typeof value === "number"
-                      ? value.toFixed(4)
-                      : value}
-                  </p>
-                </div>
-              ))}
+              {Object.entries(result.metrics).map(([key, value]) => {
+                // Statistics (precision, recall, f1) should show decimals, others as integers
+                const isStatistic = ["precision", "recall", "f1"].includes(key);
+                const displayValue = typeof value === "number"
+                  ? (isStatistic ? value.toFixed(4) : Number.isInteger(value) ? value.toString() : Math.round(value).toString())
+                  : value;
+                return (
+                  <div
+                    key={key}
+                    className="bg-gray-900 border border-gray-800 rounded p-3"
+                  >
+                    <p className="text-xs text-gray-400 capitalize mb-1">
+                      {key.replace(/_/g, " ")}
+                    </p>
+                    <p className="text-lg font-semibold text-white">
+                      {displayValue}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Run Info */}
@@ -242,8 +247,17 @@ export default function PipelineRunner() {
               <span className="capitalize">Task: {result.task_type}</span>
             </div>
 
-            {/* Expandable Details for ReDocRED */}
-            {result.task_type === "redocred" && result.outputs?.doc_details && result.outputs.doc_details.length > 0 && (
+            {/* Warning for skipped documents due to token limit */}
+            {result.task_type === "intrinsic_eval" && result.metrics.num_docs_skipped && result.metrics.num_docs_skipped > 0 && (
+              <div className="bg-yellow-900/30 border border-yellow-700 rounded-md p-3">
+                <p className="text-sm text-yellow-400 font-medium">
+                  ⚠️ Warning: {result.metrics.num_docs_skipped} document{result.metrics.num_docs_skipped !== 1 ? 's' : ''} skipped due to token limit
+                </p>
+              </div>
+            )}
+
+            {/* Expandable Details for Intrinsic Evaluation with ReDocRED */}
+            {result.task_type === "intrinsic_eval" && result.outputs?.doc_details && result.outputs.doc_details.length > 0 && (
               <div className="pt-2 border-t border-gray-800">
                 <button
                   onClick={() => setShowDetails(!showDetails)}

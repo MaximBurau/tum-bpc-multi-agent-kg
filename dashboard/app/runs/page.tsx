@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { apiClient } from "@/lib/api/client";
 
 /**
@@ -33,9 +33,197 @@ interface Run {
   } | null;
 }
 
+function RunDetailsPanel({ run, onClose }: { run: Run; onClose: () => void }) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-gray-300">
+          Run #{run.id} Details
+        </h2>
+        <button
+          onClick={onClose}
+          className="text-gray-500 hover:text-gray-400 text-xs"
+        >
+          Close
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Configuration */}
+        <div className="space-y-3">
+          <h3 className="text-xs font-medium text-gray-400">Configuration</h3>
+          <div className="space-y-2 text-xs">
+            <div className="flex justify-between">
+              <span className="text-gray-500">Task Type:</span>
+              <span className="text-gray-300 uppercase">{run.task_type}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Model:</span>
+              <span className="text-gray-300">{run.model || "Default"}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Examples:</span>
+              <span className="text-gray-300">{run.num_examples}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Duration:</span>
+              <span className="text-gray-300">{run.duration_seconds.toFixed(2)}s</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Metrics */}
+        <div className="space-y-3">
+          <h3 className="text-xs font-medium text-gray-400">Metrics</h3>
+          <div className="space-y-2 text-xs">
+            {Object.entries(run.metrics).map(([key, value]) => {
+              const isStatistic = ["precision", "recall", "f1"].includes(key);
+              const displayValue = typeof value === "number"
+                ? (isStatistic ? value.toFixed(4) : Number.isInteger(value) ? value.toString() : Math.round(value).toString())
+                : value;
+              return (
+                <div key={key} className="flex justify-between">
+                  <span className="text-gray-500 capitalize">{key.replace(/_/g, " ")}:</span>
+                  <span className="text-gray-300 font-mono">
+                    {displayValue}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Warning for skipped documents due to token limit */}
+      {run.task_type === "intrinsic_eval" && run.metrics.num_docs_skipped && run.metrics.num_docs_skipped > 0 && (
+        <div className="bg-yellow-900/30 border border-yellow-700 rounded-md p-3">
+          <p className="text-sm text-yellow-400 font-medium">
+            ⚠️ Warning: {run.metrics.num_docs_skipped} document{run.metrics.num_docs_skipped !== 1 ? 's' : ''} skipped due to token limit
+          </p>
+        </div>
+      )}
+
+      {/* Prompts */}
+      {(run.system_prompt || run.prompt) && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-medium text-gray-400">Prompts</h3>
+          {run.system_prompt && (
+            <div>
+              <p className="text-xs text-gray-500 mb-1">System Prompt:</p>
+              <pre className="bg-gray-900 border border-gray-800 rounded p-2 text-xs text-gray-300 overflow-x-auto">
+                {run.system_prompt}
+              </pre>
+            </div>
+          )}
+          {run.prompt && (
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Prompt:</p>
+              <pre className="bg-gray-900 border border-gray-800 rounded p-2 text-xs text-gray-300 overflow-x-auto">
+                {run.prompt}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Intrinsic Evaluation with ReDocRED Dataset - Detailed Results */}
+      {run.task_type === "intrinsic_eval" && run.outputs?.doc_details && (
+        <div className="space-y-4">
+          <h3 className="text-xs font-medium text-gray-400">Document Details</h3>
+          <div className="space-y-4 max-h-[600px] overflow-y-auto">
+            {(run.outputs.doc_details as any[]).map((doc: any, idx: number) => (
+              <div key={idx} className="bg-gray-900 border border-gray-800 rounded p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-gray-300">Document #{doc.doc_index}</span>
+                  <div className="flex gap-2 text-xs">
+                    <span className="text-green-400">TP: {doc.true_positives}</span>
+                    <span className="text-red-400">FP: {doc.false_positives}</span>
+                    <span className="text-yellow-400">FN: {doc.false_negatives}</span>
+                  </div>
+                </div>
+                
+                {/* Error Message */}
+                {doc.error && (
+                  <div className="bg-yellow-900/30 border border-yellow-700 rounded p-2">
+                    <p className="text-xs text-yellow-400 font-medium">⚠️ {doc.error}</p>
+                  </div>
+                )}
+                
+                {/* Text */}
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">Text:</p>
+                  <div className="bg-gray-950 border border-gray-800 rounded p-2 text-xs text-gray-300 max-h-32 overflow-y-auto">
+                    {doc.text || "N/A"}
+                  </div>
+                </div>
+
+                {/* Predicted Triples */}
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">
+                    Predicted Triples ({doc.predicted_triples?.length || 0}):
+                  </p>
+                  <div className="bg-gray-950 border border-gray-800 rounded p-2 max-h-40 overflow-y-auto space-y-1">
+                    {doc.predicted_triples && doc.predicted_triples.length > 0 ? (
+                      doc.predicted_triples.map((triple: any[], tIdx: number) => (
+                        <div key={tIdx} className="text-xs text-gray-300 font-mono">
+                          <span className="text-blue-400">({triple[0]}</span>
+                          <span className="text-gray-500">, </span>
+                          <span className="text-purple-400">{triple[1]}</span>
+                          <span className="text-gray-500">, </span>
+                          <span className="text-green-400">{triple[2]}</span>
+                          <span className="text-gray-500">)</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs text-gray-600">No predicted triples</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Gold Triples */}
+                <div>
+                  <p className="text-xs text-gray-500 mb-1">
+                    Gold Triples ({doc.gold_triples?.length || 0}):
+                  </p>
+                  <div className="bg-gray-950 border border-gray-800 rounded p-2 max-h-40 overflow-y-auto space-y-1">
+                    {doc.gold_triples && doc.gold_triples.length > 0 ? (
+                      doc.gold_triples.map((triple: any[], tIdx: number) => (
+                        <div key={tIdx} className="text-xs text-gray-300 font-mono">
+                          <span className="text-blue-400">({triple[0]}</span>
+                          <span className="text-gray-500">, </span>
+                          <span className="text-purple-400">{triple[1]}</span>
+                          <span className="text-gray-500">, </span>
+                          <span className="text-green-400">{triple[2]}</span>
+                          <span className="text-gray-500">)</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs text-gray-600">No gold triples</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Outputs (for non-intrinsic evaluation tasks) */}
+      {run.outputs && run.task_type !== "intrinsic_eval" && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-medium text-gray-400">Outputs</h3>
+          <pre className="bg-gray-900 border border-gray-800 rounded p-3 text-xs text-gray-300 overflow-x-auto max-h-96">
+            {JSON.stringify(run.outputs, null, 2)}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RunsHistory() {
   const [runs, setRuns] = useState<Run[]>([]);
-  const [selectedRun, setSelectedRun] = useState<Run | null>(null);
+  const [expandedRunId, setExpandedRunId] = useState<number | null>(null);
   const [filterTaskType, setFilterTaskType] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -74,12 +262,16 @@ export default function RunsHistory() {
     try {
       await apiClient.deleteRun(runId);
       setRuns(runs.filter((r) => r.id !== runId));
-      if (selectedRun?.id === runId) {
-        setSelectedRun(null);
+      if (expandedRunId === runId) {
+        setExpandedRunId(null);
       }
     } catch (err) {
       alert("Failed to delete run");
     }
+  };
+
+  const toggleRunDetails = (runId: number) => {
+    setExpandedRunId(expandedRunId === runId ? null : runId);
   };
 
   const handleSaveTags = async (runId: number) => {
@@ -104,11 +296,10 @@ export default function RunsHistory() {
   };
 
   const getMetricColumns = () => {
-    const allMetrics = new Set<string>();
-    runs.forEach(run => {
-      Object.keys(run.metrics).forEach(key => allMetrics.add(key));
-    });
-    return Array.from(allMetrics);
+    // Only show general metrics in the table (precision, recall, f1)
+    // Task-specific metrics (like num_docs_skipped, true_positives, etc.) are shown only in detail view
+    const generalMetrics = new Set<string>(["precision", "recall", "f1"]);
+    return Array.from(generalMetrics);
   };
 
   const metricColumns = getMetricColumns();
@@ -190,31 +381,33 @@ export default function RunsHistory() {
         {!isLoading && runs.length > 0 && (
           <div className="bg-gray-900/50 border border-gray-800 rounded-md overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
                 <thead className="bg-gray-900 border-b border-gray-800">
                   <tr>
-                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400">ID</th>
-                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400">Task</th>
-                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400">Model</th>
-                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400">Date</th>
-                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400">Duration</th>
-                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400">Examples</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400 w-16">ID</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400 w-24">Task</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400 w-48">Model</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400 w-32">Date</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400 w-24">Duration</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400 w-20">Examples</th>
                     {metricColumns.map(metric => (
-                      <th key={metric} className="text-left px-4 py-2 text-xs font-medium text-gray-400">
+                      <th key={metric} className="text-left px-4 py-2 text-xs font-medium text-gray-400 w-28">
                         {metric.replace(/_/g, " ")}
                       </th>
                     ))}
-                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400">Tags</th>
-                    <th className="text-right px-4 py-2 text-xs font-medium text-gray-400">Actions</th>
+                    <th className="text-left px-4 py-2 text-xs font-medium text-gray-400 w-32">Tags</th>
+                    <th className="text-right px-4 py-2 text-xs font-medium text-gray-400 w-20">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {runs.map((run) => (
+                  {runs.map((run) => {
+                    const isExpanded = expandedRunId === run.id;
+                    return (
+                      <React.Fragment key={run.id}>
                     <tr
-                      key={run.id}
-                      onClick={() => setSelectedRun(run)}
+                          onClick={() => toggleRunDetails(run.id)}
                       className={`border-b border-gray-800 hover:bg-gray-900/50 cursor-pointer transition-colors ${
-                        selectedRun?.id === run.id ? "bg-gray-900/70" : ""
+                            isExpanded ? "bg-gray-900/70" : ""
                       }`}
                     >
                       <td className="px-4 py-2 text-white font-mono">{run.id}</td>
@@ -235,15 +428,20 @@ export default function RunsHistory() {
                       <td className="px-4 py-2 text-gray-300 text-xs">
                         {run.num_examples}
                       </td>
-                      {metricColumns.map(metric => (
+                          {metricColumns.map(metric => {
+                            const value = run.metrics[metric];
+                            const isStatistic = ["precision", "recall", "f1"].includes(metric);
+                            const displayValue = value !== undefined
+                              ? typeof value === "number"
+                                ? (isStatistic ? value.toFixed(4) : Number.isInteger(value) ? value.toString() : Math.round(value).toString())
+                                : value
+                              : "-";
+                            return (
                         <td key={metric} className="px-4 py-2 text-gray-300 text-xs font-mono">
-                          {run.metrics[metric] !== undefined
-                            ? typeof run.metrics[metric] === "number"
-                              ? run.metrics[metric].toFixed(4)
-                              : run.metrics[metric]
-                            : "-"}
+                                {displayValue}
                         </td>
-                      ))}
+                            );
+                          })}
                       <td className="px-4 py-2" onClick={(e) => e.stopPropagation()}>
                         {editingTags === run.id ? (
                           <div className="flex gap-1">
@@ -298,7 +496,16 @@ export default function RunsHistory() {
                         </button>
                       </td>
                     </tr>
-                  ))}
+                        {isExpanded && (
+                          <tr className="border-b border-gray-800">
+                            <td colSpan={6 + metricColumns.length + 2} className="px-4 py-4 bg-gray-900/30">
+                              <RunDetailsPanel run={run} onClose={() => setExpandedRunId(null)} />
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -312,177 +519,7 @@ export default function RunsHistory() {
           </div>
         )}
 
-        {/* Detail Panel */}
-        {selectedRun && (
-          <div className="bg-gray-900/50 border border-gray-800 rounded-md p-4 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium text-gray-300">
-                Run #{selectedRun.id} Details
-              </h2>
-              <button
-                onClick={() => setSelectedRun(null)}
-                className="text-gray-500 hover:text-gray-400 text-xs"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Configuration */}
-              <div className="space-y-3">
-                <h3 className="text-xs font-medium text-gray-400">Configuration</h3>
-                <div className="space-y-2 text-xs">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Task Type:</span>
-                    <span className="text-gray-300 uppercase">{selectedRun.task_type}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Model:</span>
-                    <span className="text-gray-300">{selectedRun.model || "Default"}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Examples:</span>
-                    <span className="text-gray-300">{selectedRun.num_examples}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Duration:</span>
-                    <span className="text-gray-300">{selectedRun.duration_seconds.toFixed(2)}s</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Metrics */}
-              <div className="space-y-3">
-                <h3 className="text-xs font-medium text-gray-400">Metrics</h3>
-                <div className="space-y-2 text-xs">
-                  {Object.entries(selectedRun.metrics).map(([key, value]) => (
-                    <div key={key} className="flex justify-between">
-                      <span className="text-gray-500 capitalize">{key.replace(/_/g, " ")}:</span>
-                      <span className="text-gray-300 font-mono">
-                        {typeof value === "number" ? value.toFixed(4) : value}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Prompts */}
-            {(selectedRun.system_prompt || selectedRun.prompt) && (
-              <div className="space-y-2">
-                <h3 className="text-xs font-medium text-gray-400">Prompts</h3>
-                {selectedRun.system_prompt && (
-                  <div>
-                    <p className="text-xs text-gray-500 mb-1">System Prompt:</p>
-                    <pre className="bg-gray-900 border border-gray-800 rounded p-2 text-xs text-gray-300 overflow-x-auto">
-                      {selectedRun.system_prompt}
-                    </pre>
-                  </div>
-                )}
-                {selectedRun.prompt && (
-                  <div>
-                    <p className="text-xs text-gray-500 mb-1">Prompt:</p>
-                    <pre className="bg-gray-900 border border-gray-800 rounded p-2 text-xs text-gray-300 overflow-x-auto">
-                      {selectedRun.prompt}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* ReDocRED Detailed Results */}
-            {selectedRun.task_type === "redocred" && selectedRun.outputs?.doc_details && (
-              <div className="space-y-4">
-                <h3 className="text-xs font-medium text-gray-400">Document Details</h3>
-                <div className="space-y-4 max-h-[600px] overflow-y-auto">
-                  {(selectedRun.outputs.doc_details as any[]).map((doc: any, idx: number) => (
-                    <div key={idx} className="bg-gray-900 border border-gray-800 rounded p-3 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-gray-300">Document #{doc.doc_index}</span>
-                        <div className="flex gap-2 text-xs">
-                          <span className="text-green-400">TP: {doc.true_positives}</span>
-                          <span className="text-red-400">FP: {doc.false_positives}</span>
-                          <span className="text-yellow-400">FN: {doc.false_negatives}</span>
-                        </div>
-                      </div>
-                      
-                      {/* Error Message */}
-                      {doc.error && (
-                        <div className="bg-yellow-900/30 border border-yellow-700 rounded p-2">
-                          <p className="text-xs text-yellow-400 font-medium">⚠️ {doc.error}</p>
-                        </div>
-                      )}
-                      
-                      {/* Text */}
-                      <div>
-                        <p className="text-xs text-gray-500 mb-1">Text:</p>
-                        <div className="bg-gray-950 border border-gray-800 rounded p-2 text-xs text-gray-300 max-h-32 overflow-y-auto">
-                          {doc.text || "N/A"}
-                        </div>
-                      </div>
-
-                      {/* Predicted Triples */}
-                      <div>
-                        <p className="text-xs text-gray-500 mb-1">
-                          Predicted Triples ({doc.predicted_triples?.length || 0}):
-                        </p>
-                        <div className="bg-gray-950 border border-gray-800 rounded p-2 max-h-40 overflow-y-auto space-y-1">
-                          {doc.predicted_triples && doc.predicted_triples.length > 0 ? (
-                            doc.predicted_triples.map((triple: any[], tIdx: number) => (
-                              <div key={tIdx} className="text-xs text-gray-300 font-mono">
-                                <span className="text-blue-400">({triple[0]}</span>
-                                <span className="text-gray-500">, </span>
-                                <span className="text-purple-400">{triple[1]}</span>
-                                <span className="text-gray-500">, </span>
-                                <span className="text-green-400">{triple[2]}</span>
-                                <span className="text-gray-500">)</span>
-                              </div>
-                            ))
-                          ) : (
-                            <p className="text-xs text-gray-600">No predicted triples</p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Gold Triples */}
-                      <div>
-                        <p className="text-xs text-gray-500 mb-1">
-                          Gold Triples ({doc.gold_triples?.length || 0}):
-                        </p>
-                        <div className="bg-gray-950 border border-gray-800 rounded p-2 max-h-40 overflow-y-auto space-y-1">
-                          {doc.gold_triples && doc.gold_triples.length > 0 ? (
-                            doc.gold_triples.map((triple: any[], tIdx: number) => (
-                              <div key={tIdx} className="text-xs text-gray-300 font-mono">
-                                <span className="text-blue-400">({triple[0]}</span>
-                                <span className="text-gray-500">, </span>
-                                <span className="text-purple-400">{triple[1]}</span>
-                                <span className="text-gray-500">, </span>
-                                <span className="text-green-400">{triple[2]}</span>
-                                <span className="text-gray-500">)</span>
-                              </div>
-                            ))
-                          ) : (
-                            <p className="text-xs text-gray-600">No gold triples</p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Outputs (for non-ReDocRED tasks) */}
-            {selectedRun.outputs && selectedRun.task_type !== "redocred" && (
-              <div className="space-y-2">
-                <h3 className="text-xs font-medium text-gray-400">Outputs</h3>
-                <pre className="bg-gray-900 border border-gray-800 rounded p-3 text-xs text-gray-300 overflow-x-auto max-h-96">
-                  {JSON.stringify(selectedRun.outputs, null, 2)}
-                </pre>
-              </div>
-            )}
-          </div>
-        )}
+        {/* RunDetailsPanel component moved inline */}
       </div>
     </main>
   );
