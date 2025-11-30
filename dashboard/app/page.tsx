@@ -86,16 +86,6 @@ export default function PipelineRunner() {
               >
                 Question Answering
               </button>
-              <button
-                onClick={() => setTaskType("ner")}
-                className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
-                  taskType === "ner"
-                    ? "bg-gray-700 text-white"
-                    : "bg-gray-800 text-gray-400 hover:bg-gray-750"
-                }`}
-              >
-                Named Entity Recognition
-              </button>
             </div>
           </div>
 
