@@ -11,8 +11,9 @@ import { usePathname } from 'next/navigation';
 
 const navigation = [
   { name: 'Pipeline Runner', href: '/' },
+  { name: 'Flows', href: '/flows' },
+  { name: 'Agents', href: '/agents' },
   { name: 'Run History', href: '/runs' },
-  { name: 'Q&A Explorer', href: '/qa-explorer' },
   { name: 'Playground', href: '/playground' },
 ];
 
