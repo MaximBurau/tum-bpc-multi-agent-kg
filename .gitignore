@@ -82,3 +82,6 @@ next-env.d.ts
 data/*/raw/
 
 *.db
+
+
+assets/*
