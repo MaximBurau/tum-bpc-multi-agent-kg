@@ -59,7 +59,7 @@ export default function Playground() {
   const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [error, setError] = useState<string | null>(null);
-  const graphRef = useRef<any>();
+  const graphRef = useRef<any>(null);
 
   const handleExtract = async () => {
     if (!inputText.trim()) {
