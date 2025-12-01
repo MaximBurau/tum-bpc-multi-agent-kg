@@ -1,7 +1,9 @@
 """
-SQLite database helper for storing evaluation run records.
 
-Provides a simple interface for logging pipeline runs with metrics, prompts, and timestamps.
+
+Provides:
+- SQLAlchemy engine and session management for the new agent/flow system
+- Legacy RunDatabase class for backward compatibility with evaluation runs
 """
 
 import sqlite3
@@ -9,6 +11,30 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import json
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
+
+from src.models import Base
+
+# Database config
+DATABASE_PATH = "data/runs.db"
+DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
+
+# SQLAlchemy engine and session factory
+engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+def init_db():
+    """Initialize all database tables. Call this on startup."""
+    Path(DATABASE_PATH).parent.mkdir(parents=True, exist_ok=True)
+    Base.metadata.create_all(engine)
+
+
+def get_session() -> Session:
+    """Get a new database session. Caller is responsible for closing it."""
+    return SessionLocal()
 
 
 class RunDatabase:
