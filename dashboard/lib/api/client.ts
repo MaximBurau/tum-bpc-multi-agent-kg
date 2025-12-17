@@ -272,7 +272,8 @@ class APIClient {
     prompt?: string,
     systemPrompt?: string,
     model?: string,
-    tags?: string[]
+    tags?: string[],
+    flowId?: number
   ) {
     return this.request('/api/pipeline/run', {
       method: 'POST',
@@ -283,6 +284,7 @@ class APIClient {
         system_prompt: systemPrompt,
         model,
         tags,
+        flow_id: flowId,
       }),
     });
   }
@@ -350,10 +352,14 @@ class APIClient {
     return this.request('/api/kg/graph', { method: 'GET' });
   }
 
-  async extractKnowledgeGraph(text: string) {
+  async extractKnowledgeGraph(text: string, systemPrompt?: string) {
+    const body: { text: string; system_prompt?: string } = { text };
+    if (systemPrompt && systemPrompt.trim()) {
+      body.system_prompt = systemPrompt.trim();
+    }
     return this.request('/api/kg/extract', {
       method: 'POST',
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(body),
     });
   }
 }
