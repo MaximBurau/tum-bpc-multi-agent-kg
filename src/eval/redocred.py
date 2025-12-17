@@ -258,7 +258,7 @@ def extract_relations_llm(
             response_model=KGPrediction,
             system_prompt=system_prompt,
             temperature=0.0,
-            max_tokens=3500,
+            #max_tokens=3500,
         )
     except Exception as e:
         # Check if it's a token limit error
@@ -328,7 +328,66 @@ def _kgprediction_to_triples(
     return triples
 
 
-def extract_relations_with_agent(
+def _flow_output_to_triples(
+    flow_output: Dict[str, Any],
+    relation_labels: List[str],
+) -> List[Tuple[str, str, str]]:
+    """
+    Convert flow output (from LangGraph state) to triples.
+    
+    Flow output should have 'entities' and 'relations' keys matching KGPrediction structure.
+    This function handles both Pydantic models and dict representations.
+    
+    Args:
+        flow_output: Dict from flow execution with 'entities' and 'relations' keys
+        relation_labels: List of allowed relation IDs (for filtering)
+    
+    Returns:
+        List of (subject, relation_id, object) triples
+    """
+    # Extract entities and relations from flow output
+    # Flow output might have them directly or nested
+    entities_data = flow_output.get("entities", [])
+    relations_data = flow_output.get("relations", [])
+    
+    # Convert to KGPrediction format if needed
+    # Handle both dict and Pydantic model representations
+    entities = []
+    for e in entities_data:
+        if isinstance(e, dict):
+            # Convert dict to PredictedEntity
+            mentions = [
+                PredictedMention(**m) if isinstance(m, dict) else m
+                for m in e.get("mentions", [])
+            ]
+            entities.append(PredictedEntity(
+                entity_id=e.get("entity_id", ""),
+                type=e.get("type", "MISC"),
+                canonical_name=e.get("canonical_name", ""),
+                mentions=mentions
+            ))
+        else:
+            # Already a Pydantic model
+            entities.append(e)
+    
+    relations = []
+    for r in relations_data:
+        if isinstance(r, dict):
+            relations.append(PredictedRelation(
+                head_entity_id=r.get("head_entity_id", ""),
+                tail_entity_id=r.get("tail_entity_id", ""),
+                relation_id=r.get("relation_id", ""),
+                evidence_sentences=r.get("evidence_sentences", [])
+            ))
+        else:
+            relations.append(r)
+    
+    # Create KGPrediction and use existing conversion function
+    pred_kg = KGPrediction(entities=entities, relations=relations)
+    return _kgprediction_to_triples(pred_kg, relation_labels)
+
+
+async def extract_relations_with_agent(
     text: str,
     agent: BaseAgent,
     relation_labels: List[str],
@@ -352,7 +411,11 @@ def extract_relations_with_agent(
     """
     try:
         # Call the agent - it should return a KGPrediction
-        pred_kg: KGPrediction = agent.run(text, temperature=0.0, max_tokens=3500)
+        # Run in thread pool to avoid blocking event loop since agent.run is synchronous
+        import asyncio
+        pred_kg: KGPrediction = await asyncio.to_thread(
+            agent.run, text, temperature=0.0, max_tokens=3500
+        )
     except Exception as e:
         # Check if it's a token limit error
         error_str = str(e)
@@ -368,11 +431,12 @@ def extract_relations_with_agent(
     return triples, None
 
 
-def evaluate_redocred_re(
+async def evaluate_redocred_re(
     path: str | None = None,
     limit: int | None = None,
     return_details: bool = False,
     agent: Optional[BaseAgent] = None,
+    flow_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Evaluate relation extraction quality on Re-DocRED using an agent or direct LLM call.
@@ -396,6 +460,8 @@ def evaluate_redocred_re(
         agent: Optional agent to use for extraction. If None, uses direct LLM call (extract_relations_llm).
                If provided, uses extract_relations_with_agent. If agent is None, a default
                VanillaRelationExtractionAgent will be created automatically.
+        flow_id: Optional flow ID to use for extraction. If provided, runs the flow instead of agent.
+                 flow_id takes precedence over agent.
 
     Returns:
         Dictionary with metrics and optionally detailed per-document results
@@ -416,6 +482,175 @@ def evaluate_redocred_re(
         {lab["r"] for doc in docs for lab in doc.get("labels", [])}
     )
 
+    # If flow_id provided, use flow execution instead of agent
+    if flow_id is not None:
+        from ..flow.runner import run_flow
+        from ..db import get_session
+        from ..models import Flow
+        
+        session = get_session()
+        try:
+            flow = session.query(Flow).filter_by(id=flow_id).first()
+            if not flow:
+                raise ValueError(f"Flow not found: {flow_id}")
+        finally:
+            session.close()
+        
+        # Use flow execution path
+        tp = 0
+        fp = 0
+        fn = 0
+        doc_details = [] if return_details else None
+        num_evaluated_docs = 0
+        skipped_docs = 0
+        
+        # Format relation labels once for all documents
+        relation_labels_str = "\n".join(f"- {r}" for r in all_rel_labels)
+        
+        async def process_document(doc_idx: int, doc: Dict[str, Any]) -> Dict[str, Any]:
+            """Process a single document and return its results."""
+            try:
+                # 1) Build gold triples
+                gold_triples = build_gold_triples(doc)
+                
+                # 2) Reconstruct plain text
+                sents = doc["sents"]
+                text = " ".join(" ".join(sent) for sent in sents)
+                
+                # 3) Run flow with relation_labels in state
+                try:
+                    # Run flow - state needs text and relation_labels (for prompt formatting)
+                    result = await run_flow(
+                        flow_id=flow_id,
+                        input_text=text,
+                        write_to_neo4j=False,  # Don't write during eval
+                        session=None,
+                        initial_state={"relation_labels": relation_labels_str}
+                    )
+                    
+                    # Extract output from flow result
+                    flow_output = result.get("output", {})
+                    
+                    # Convert flow output to triples
+                    pred_triples_list = _flow_output_to_triples(flow_output, all_rel_labels)
+                    error_message = None
+                    
+                except Exception as e:
+                    error_str = str(e)
+                    if "token limit" in error_str.lower() or "max_tokens" in error_str.lower():
+                        return {
+                            "doc_index": doc_idx,
+                            "skipped": True,
+                            "error": "Token limit reached"
+                        }
+                    else:
+                        # For other errors, log and continue
+                        print(f"Error processing document {doc_idx + 1}: {error_str}")
+                        pred_triples_list = []
+                        error_message = error_str
+                
+                pred_triples = set(pred_triples_list)
+                
+                # 4) Set-based counts
+                doc_tp = len(pred_triples & gold_triples)
+                doc_fp = len(pred_triples - gold_triples)
+                doc_fn = len(gold_triples - pred_triples)
+                
+                return {
+                    "doc_index": doc_idx,
+                    "skipped": False,
+                    "text": text if return_details else None,
+                    "predicted_triples": [list(t) for t in pred_triples_list] if return_details else pred_triples_list,
+                    "gold_triples": [list(t) for t in gold_triples] if return_details else None,
+                    "true_positives": doc_tp,
+                    "false_positives": doc_fp,
+                    "false_negatives": doc_fn,
+                    "error": error_message,
+                }
+            except Exception as e:
+                print(f"Unexpected error processing document {doc_idx + 1}: {e}")
+                return {
+                    "doc_index": doc_idx,
+                    "skipped": True,
+                    "error": str(e)
+                }
+        
+        # Process all documents in parallel with concurrency limit
+        import asyncio
+        # Limit concurrent requests to avoid overwhelming API (10 at a time)
+        semaphore = asyncio.Semaphore(10)
+        
+        async def process_with_limit(doc_idx: int, doc: Dict[str, Any]) -> Dict[str, Any]:
+            async with semaphore:
+                return await process_document(doc_idx, doc)
+        
+        tasks = [process_with_limit(doc_idx, doc) for doc_idx, doc in enumerate(docs)]
+        results = await asyncio.gather(*tasks)
+        
+        # Aggregate results
+        for result in results:
+            if result.get("skipped"):
+                skipped_docs += 1
+                if return_details:
+                    doc_details.append({
+                        "doc_index": result["doc_index"],
+                        "text": result.get("text", ""),
+                        "predicted_triples": [],
+                        "gold_triples": [],
+                        "true_positives": 0,
+                        "false_positives": 0,
+                        "false_negatives": 0,
+                        "error": result.get("error"),
+                    })
+                continue
+            
+            doc_tp = result["true_positives"]
+            doc_fp = result["false_positives"]
+            doc_fn = result["false_negatives"]
+            
+            tp += doc_tp
+            fp += doc_fp
+            fn += doc_fn
+            num_evaluated_docs += 1
+            
+            # Store per-document details if requested
+            if return_details:
+                doc_details.append({
+                    "doc_index": result["doc_index"],
+                    "text": result["text"],
+                    "predicted_triples": result["predicted_triples"],
+                    "gold_triples": result["gold_triples"],
+                    "true_positives": doc_tp,
+                    "false_positives": doc_fp,
+                    "false_negatives": doc_fn,
+                    "error": result.get("error"),
+                })
+        
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if (precision + recall) > 0
+            else 0.0
+        )
+        
+        result = {
+            "num_docs": int(num_evaluated_docs),
+            "num_docs_total": int(len(docs)),
+            "num_docs_skipped": int(skipped_docs),
+            "true_positives": int(tp),
+            "false_positives": int(fp),
+            "false_negatives": int(fn),
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+        
+        if return_details:
+            result["doc_details"] = doc_details
+        
+        return result
+    
     # If no agent provided, create a default VanillaRelationExtractionAgent
     if agent is None:
         from ..agents.vanilla_re_agent import VanillaRelationExtractionAgent
@@ -440,7 +675,7 @@ def evaluate_redocred_re(
         text = " ".join(" ".join(sent) for sent in sents)
 
         # 3) Extract relations using agent
-        pred_triples_list, error_message = extract_relations_with_agent(
+        pred_triples_list, error_message = await extract_relations_with_agent(
             text, agent, all_rel_labels, rel_descriptions=rel_info
         )
         
