@@ -47,6 +47,10 @@ def parse_type(type_def: Any, model_cache: Dict[str, Type]) -> Type:
     if isinstance(type_def, dict):
         type_kind = type_def.get("type")
         
+        # Check if it's a primitive wrapped in a dict (e.g., {"type": "int"})
+        if type_kind in PRIMITIVES:
+            return PRIMITIVES[type_kind]
+        
         # List type: {"type": "list", "items": <inner>}
         if type_kind == "list":
             inner_type = parse_type(type_def["items"], model_cache)
