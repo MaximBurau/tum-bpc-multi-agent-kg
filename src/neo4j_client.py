@@ -7,8 +7,7 @@ basic operations on the knowledge graph.
 
 from neo4j import GraphDatabase
 from typing import List, Dict, Any, Optional
-import os
-from config import config
+from .config import config
 
 
 class Neo4jClient:
@@ -21,21 +20,14 @@ class Neo4jClient:
     
     def __init__(
         self,
-        uri: Optional[str] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None
+
     ):
         """
         Initialize Neo4j client.
-        
-        Args:
-            uri: Neo4j connection URI (default: from env or localhost)
-            user: Database username (default: from env or 'neo4j')
-            password: Database password (default: from env)
         """
-        self.uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        self.user = user or os.getenv("NEO4J_USER", "neo4j")
-        self.password = password or os.getenv("NEO4J_PASSWORD", "password")
+        self.uri = config.neo4j_uri
+        self.user = config.neo4j_user
+        self.password = config.neo4j_password
         
         self.driver = None
         self._connect()
@@ -140,8 +132,29 @@ class Neo4jClient:
                 from_name=from_name,
                 to_name=to_name
             )
+    
+    def write_triples(self, triples):
+        if not self.driver:
+            return
+        
+        records = [
+            {"subject": s, "predicate": p, "object": o}
+            for s, p, o in triples
+        ]
+
+        query = """
+        UNWIND $triples AS t
+        MERGE (s:Entity {name: t.subject})
+        MERGE (o:Entity {name: t.object})
+        MERGE (s)-[r:RELATION {type: t.predicate}]->(o)
+        """
+
+        with self.driver.session() as session:
+            session.run(query, triples=records)
 
 
 # Singleton instance
 neo4j_client = Neo4jClient()
+
+
 
