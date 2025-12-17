@@ -9,6 +9,7 @@ Handles:
 """
 
 import time
+import asyncio
 from typing import Dict, Any, Optional
 
 from sqlalchemy.orm import Session
@@ -73,7 +74,8 @@ async def run_flow(
     flow_id: int,
     input_text: str,
     write_to_neo4j: bool = True,
-    session: Optional[Session] = None
+    session: Optional[Session] = None,
+    initial_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Execute a flow and store the run record.
@@ -83,6 +85,7 @@ async def run_flow(
         input_text: Input text to process
         write_to_neo4j: Whether to write extracted KG to Neo4j
         session: Optional database session (creates one if not provided)
+        initial_state: Optional additional state to pass to flow (merged with {"text": input_text})
         
     Returns:
         Dict with run results:
@@ -97,32 +100,71 @@ async def run_flow(
     if own_session:
         session = get_session()
     
-    run = None
+    run_id = None
+    
+    # Helper functions for blocking DB operations
+    def _load_flow():
+        """Load flow - runs in thread pool."""
+        sess = get_session()
+        try:
+            flow = sess.query(Flow).filter_by(id=flow_id).first()
+            if not flow:
+                raise ValueError(f"Flow not found: {flow_id}")
+            return flow
+        finally:
+            sess.close()
+    
+    def _create_run():
+        """Create run record - runs in thread pool."""
+        sess = get_session()
+        try:
+            run = FlowRun(
+                flow_id=flow_id,
+                input_text=input_text,
+                status="running"
+            )
+            sess.add(run)
+            sess.commit()
+            # Refresh to get the ID
+            sess.refresh(run)
+            return run.id
+        finally:
+            sess.close()
+    
+    def _update_run(run_id, output, trace, duration, status="completed", error_msg=None):
+        """Update run record - runs in thread pool."""
+        sess = get_session()
+        try:
+            run_obj = sess.query(FlowRun).filter_by(id=run_id).first()
+            if run_obj:
+                run_obj.output_json = output
+                run_obj.trace_json = trace
+                run_obj.status = status
+                run_obj.duration_seconds = round(duration, 3)
+                if error_msg:
+                    run_obj.error_message = error_msg
+                sess.commit()
+        finally:
+            sess.close()
     
     try:
-        # Load flow definition
-        flow = session.query(Flow).filter_by(id=flow_id).first()
-        if not flow:
-            raise ValueError(f"Flow not found: {flow_id}")
+        # Load flow (non-blocking)
+        flow = await asyncio.to_thread(_load_flow)
         
-        # Create run record (status: running)
-        run = FlowRun(
-            flow_id=flow_id,
-            input_text=input_text,
-            status="running"
-        )
-        session.add(run)
-        session.commit()
+        # Create run record (non-blocking)
+        run_id = await asyncio.to_thread(_create_run)
         
-        # Compile flow to LangGraph
+        # Compile flow to LangGraph (uses session for agent loading, but that's fast)
         model_cache = {}
         graph = compile_flow(flow.yaml_definition, session, model_cache)
         
         # Execute
         start_time = time.time()
-        initial_state = {"text": input_text}
+        state = {"text": input_text}
+        if initial_state:
+            state.update(initial_state)
         
-        result = await graph.ainvoke(initial_state)
+        result = await graph.ainvoke(state)
         
         duration = time.time() - start_time
         
@@ -130,34 +172,31 @@ async def run_flow(
         output = _serialize_output(result)
         trace = _collect_traces(result)
         
-        # Update run record
-        run.output_json = output
-        run.trace_json = trace
-        run.status = "completed"
-        run.duration_seconds = round(duration, 3)
-        session.commit()
+        # Update run record (non-blocking)
+        await asyncio.to_thread(_update_run, run_id, output, trace, duration)
         
         # Write to Neo4j if requested and we have relations
         if write_to_neo4j and "relations" in output:
             try:
-                _write_to_neo4j(output)
+                await asyncio.to_thread(_write_to_neo4j, output)
             except Exception as e:
                 # Don't fail the run if Neo4j write fails
                 print(f"Warning: Failed to write to Neo4j: {e}")
         
         return {
-            "run_id": run.id,
+            "run_id": run_id,
             "output": output,
             "trace": trace,
-            "duration_seconds": run.duration_seconds
+            "duration_seconds": round(duration, 3)
         }
         
     except Exception as e:
-        # Update run record with error
-        if run:
-            run.status = "failed"
-            run.error_message = str(e)
-            session.commit()
+        # Update run record with error (non-blocking)
+        if run_id:
+            try:
+                await asyncio.to_thread(_update_run, run_id, {}, {}, 0, status="failed", error_msg=str(e))
+            except Exception:
+                pass  # Don't fail if error update fails
         raise
         
     finally:
