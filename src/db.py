@@ -22,7 +22,16 @@ DATABASE_PATH = "data/runs.db"
 DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
 
 # SQLAlchemy engine and session factory
-engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
+# Increase pool size to handle parallel evaluations (10 concurrent + buffer for back-to-back runs)
+engine = create_engine(
+    DATABASE_URL, 
+    echo=False, 
+    connect_args={"check_same_thread": False},
+    pool_size=30,  # Increased to handle 10 concurrent docs × 3 sessions each = 30 peak
+    max_overflow=15,  # Allow overflow for bursts and back-to-back runs
+    pool_pre_ping=True,  # Verify connections before using
+    pool_recycle=3600  # Recycle connections after 1 hour to prevent stale connections
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
