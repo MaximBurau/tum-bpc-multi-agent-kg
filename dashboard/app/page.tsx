@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { apiClient } from "@/lib/api/client";
 
 /**
@@ -13,10 +13,27 @@ interface RunResult {
   metrics: Record<string, number>;
   duration_seconds: number;
   num_examples: number;
+  outputs?: {
+    doc_details?: Array<{
+      doc_index: number;
+      text: string;
+      predicted_triples: Array<[string, string, string]>;
+      gold_triples: Array<[string, string, string]>;
+      true_positives: number;
+      false_positives: number;
+      false_negatives: number;
+      error?: string;
+    }>;
+  };
+}
+
+interface Flow {
+  id: number;
+  name: string;
 }
 
 export default function PipelineRunner() {
-  const [taskType, setTaskType] = useState<"qa" | "ner">("qa");
+  const [taskType, setTaskType] = useState<"qa" | "ner" | "intrinsic_eval">("qa");
   const [limit, setLimit] = useState<number>(10);
   const [model, setModel] = useState<string>("meta-llama/Llama-3.1-8B-Instruct");
   const [systemPrompt, setSystemPrompt] = useState<string>("");
@@ -24,11 +41,48 @@ export default function PipelineRunner() {
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
+  const [flows, setFlows] = useState<Flow[]>([]);
+  const [selectedFlowId, setSelectedFlowId] = useState<number | undefined>(undefined);
+  const [loadingFlows, setLoadingFlows] = useState(false);
+
+  // Load flows when intrinsic_eval is selected
+  useEffect(() => {
+    if (taskType === "intrinsic_eval") {
+      setLoadingFlows(true);
+      setFlows([]);
+      setSelectedFlowId(undefined);
+      
+      apiClient.getFlows()
+        .then((response) => {
+          if (response.data?.flows) {
+            setFlows(response.data.flows);
+            // Auto-select redocred_eval_flow if it exists
+            const redocredFlow = response.data.flows.find((f: Flow) => f.name === "redocred_eval_flow");
+            if (redocredFlow) {
+              setSelectedFlowId(redocredFlow.id);
+            }
+          }
+        })
+        .catch((err) => {
+          console.error("Failed to load flows:", err);
+          setFlows([]);
+        })
+        .finally(() => {
+          setLoadingFlows(false);
+        });
+    } else {
+      setSelectedFlowId(undefined);
+      setFlows([]);
+      setLoadingFlows(false);
+    }
+  }, [taskType]);
 
   const handleRun = async () => {
     setIsRunning(true);
     setError(null);
     setResult(null);
+    setShowDetails(false);
 
     try {
       const tagsList = tags.split(",").map(t => t.trim()).filter(t => t);
@@ -38,7 +92,8 @@ export default function PipelineRunner() {
         undefined,
         systemPrompt || undefined,
         model,
-        tagsList.length > 0 ? tagsList : undefined
+        tagsList.length > 0 ? tagsList : undefined,
+        taskType === "intrinsic_eval" ? selectedFlowId : undefined
       );
       
       if (response.error) {
@@ -86,6 +141,26 @@ export default function PipelineRunner() {
               >
                 Question Answering
               </button>
+              <button
+                onClick={() => setTaskType("ner")}
+                className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                  taskType === "ner"
+                    ? "bg-gray-700 text-white"
+                    : "bg-gray-800 text-gray-400 hover:bg-gray-750"
+                }`}
+              >
+                Named Entity Recognition
+              </button>
+              <button
+                onClick={() => setTaskType("intrinsic_eval")}
+                className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                  taskType === "intrinsic_eval"
+                    ? "bg-gray-700 text-white"
+                    : "bg-gray-800 text-gray-400 hover:bg-gray-750"
+                }`}
+              >
+                Intrinsic Eval (ReDocRED)
+              </button>
             </div>
           </div>
 
@@ -98,7 +173,8 @@ export default function PipelineRunner() {
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-gray-600"
+                disabled={taskType === "intrinsic_eval"}
+                className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <option value="meta-llama/Llama-3.1-8B-Instruct">Llama 3.1 8B</option>
                 <option value="openai/gpt-4o">GPT-4o</option>
@@ -122,6 +198,34 @@ export default function PipelineRunner() {
               />
             </div>
           </div>
+
+          {/* Flow Selection for Intrinsic Eval */}
+          {taskType === "intrinsic_eval" && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-gray-400">
+                Flow (Optional - uses default agent if not selected)
+              </label>
+              <select
+                value={selectedFlowId || ""}
+                onChange={(e) => setSelectedFlowId(e.target.value ? parseInt(e.target.value) : undefined)}
+                disabled={loadingFlows}
+                className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loadingFlows ? (
+                  <option value="">Loading flows...</option>
+                ) : (
+                  <>
+                    <option value="">Use default agent (no flow)</option>
+                    {flows.map((flow) => (
+                      <option key={flow.id} value={flow.id}>
+                        {flow.name} (ID: {flow.id})
+                      </option>
+                    ))}
+                  </>
+                )}
+              </select>
+            </div>
+          )}
 
           {/* System Prompt */}
           <div className="space-y-1.5">
@@ -184,21 +288,26 @@ export default function PipelineRunner() {
 
             {/* Metrics Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {Object.entries(result.metrics).map(([key, value]) => (
-                <div
-                  key={key}
-                  className="bg-gray-900 border border-gray-800 rounded p-3"
-                >
-                  <p className="text-xs text-gray-400 capitalize mb-1">
-                    {key.replace(/_/g, " ")}
-                  </p>
-                  <p className="text-lg font-semibold text-white">
-                    {typeof value === "number"
-                      ? value.toFixed(4)
-                      : value}
-                  </p>
-                </div>
-              ))}
+              {Object.entries(result.metrics).map(([key, value]) => {
+                // Statistics (precision, recall, f1) should show decimals, others as integers
+                const isStatistic = ["precision", "recall", "f1"].includes(key);
+                const displayValue = typeof value === "number"
+                  ? (isStatistic ? value.toFixed(4) : Number.isInteger(value) ? value.toString() : Math.round(value).toString())
+                  : value;
+                return (
+                  <div
+                    key={key}
+                    className="bg-gray-900 border border-gray-800 rounded p-3"
+                  >
+                    <p className="text-xs text-gray-400 capitalize mb-1">
+                      {key.replace(/_/g, " ")}
+                    </p>
+                    <p className="text-lg font-semibold text-white">
+                      {displayValue}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Run Info */}
@@ -207,6 +316,176 @@ export default function PipelineRunner() {
               <span>Examples: {result.num_examples}</span>
               <span className="capitalize">Task: {result.task_type}</span>
             </div>
+
+            {/* Warning for skipped documents due to token limit */}
+            {result.task_type === "intrinsic_eval" && result.metrics.num_docs_skipped && result.metrics.num_docs_skipped > 0 && (
+              <div className="bg-yellow-900/30 border border-yellow-700 rounded-md p-3">
+                <p className="text-sm text-yellow-400 font-medium">
+                  ⚠️ Warning: {result.metrics.num_docs_skipped} document{result.metrics.num_docs_skipped !== 1 ? 's' : ''} skipped due to token limit
+                </p>
+              </div>
+            )}
+
+            {/* Expandable Details for Intrinsic Evaluation with ReDocRED */}
+            {result.task_type === "intrinsic_eval" && result.outputs?.doc_details && result.outputs.doc_details.length > 0 && (
+              <div className="pt-2 border-t border-gray-800">
+                <button
+                  onClick={() => setShowDetails(!showDetails)}
+                  className="flex items-center justify-between w-full text-xs font-medium text-gray-400 hover:text-gray-300 transition-colors"
+                >
+                  <span>{showDetails ? "Hide" : "Show"} Detailed Results</span>
+                  <span className="text-lg">{showDetails ? "−" : "+"}</span>
+                </button>
+
+                {showDetails && (
+                  <div className="mt-4 space-y-4">
+                    {result.outputs.doc_details.map((doc, docIdx) => {
+                      // Calculate TP, FP, FN for this document
+                      const predSet = new Set(doc.predicted_triples.map(t => JSON.stringify(t)));
+                      const goldSet = new Set(doc.gold_triples.map(t => JSON.stringify(t)));
+                      
+                      const tp = doc.predicted_triples.filter(t => goldSet.has(JSON.stringify(t)));
+                      const fp = doc.predicted_triples.filter(t => !goldSet.has(JSON.stringify(t)));
+                      const fn = doc.gold_triples.filter(t => !predSet.has(JSON.stringify(t)));
+
+                      return (
+                        <div key={docIdx} className="bg-gray-900 border border-gray-800 rounded p-4 space-y-4">
+                          <div className="flex items-center justify-between">
+                            <h3 className="text-xs font-medium text-gray-300">Document #{doc.doc_index}</h3>
+                            <div className="flex gap-3 text-xs">
+                              <span className="text-green-400">TP: {tp.length}</span>
+                              <span className="text-red-400">FP: {fp.length}</span>
+                              <span className="text-yellow-400">FN: {fn.length}</span>
+                            </div>
+                          </div>
+
+                          {/* Error Message */}
+                          {doc.error && (
+                            <div className="bg-yellow-900/30 border border-yellow-700 rounded p-2">
+                              <p className="text-xs text-yellow-400 font-medium">⚠️ {doc.error}</p>
+                            </div>
+                          )}
+
+                          {/* Text */}
+                          <div>
+                            <h4 className="text-xs font-medium text-gray-400 mb-2">Document Text</h4>
+                            <div className="bg-gray-950 border border-gray-800 rounded p-3 text-xs text-gray-300 max-h-48 overflow-y-auto">
+                              {doc.text || "N/A"}
+                            </div>
+                          </div>
+
+                          {/* First 20 Predicted Triples */}
+                          <div>
+                            <h4 className="text-xs font-medium text-gray-400 mb-2">
+                              Predicted Triples (First 20 of {doc.predicted_triples.length})
+                            </h4>
+                            <div className="bg-gray-950 border border-gray-800 rounded p-3 max-h-64 overflow-y-auto space-y-1">
+                              {doc.predicted_triples.slice(0, 20).map((triple, idx) => (
+                                <div key={idx} className="text-xs text-gray-300 font-mono">
+                                  <span className="text-blue-400">({triple[0]}</span>
+                                  <span className="text-gray-500">, </span>
+                                  <span className="text-purple-400">{triple[1]}</span>
+                                  <span className="text-gray-500">, </span>
+                                  <span className="text-green-400">{triple[2]}</span>
+                                  <span className="text-gray-500">)</span>
+                                </div>
+                              ))}
+                              {doc.predicted_triples.length === 0 && (
+                                <p className="text-xs text-gray-600">No predicted triples</p>
+                              )}
+                              {doc.predicted_triples.length > 20 && (
+                                <p className="text-xs text-gray-500 italic">
+                                  ... and {doc.predicted_triples.length - 20} more
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* First 20 Gold Triples */}
+                          <div>
+                            <h4 className="text-xs font-medium text-gray-400 mb-2">
+                              Gold Triples (First 20 of {doc.gold_triples.length})
+                            </h4>
+                            <div className="bg-gray-950 border border-gray-800 rounded p-3 max-h-64 overflow-y-auto space-y-1">
+                              {doc.gold_triples.slice(0, 20).map((triple, idx) => (
+                                <div key={idx} className="text-xs text-gray-300 font-mono">
+                                  <span className="text-blue-400">({triple[0]}</span>
+                                  <span className="text-gray-500">, </span>
+                                  <span className="text-purple-400">{triple[1]}</span>
+                                  <span className="text-gray-500">, </span>
+                                  <span className="text-green-400">{triple[2]}</span>
+                                  <span className="text-gray-500">)</span>
+                                </div>
+                              ))}
+                              {doc.gold_triples.length === 0 && (
+                                <p className="text-xs text-gray-600">No gold triples</p>
+                              )}
+                              {doc.gold_triples.length > 20 && (
+                                <p className="text-xs text-gray-500 italic">
+                                  ... and {doc.gold_triples.length - 20} more
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* First 20 False Positives */}
+                          {fp.length > 0 && (
+                            <div>
+                              <h4 className="text-xs font-medium text-red-400 mb-2">
+                                False Positives (First 20 of {fp.length})
+                              </h4>
+                              <div className="bg-gray-950 border border-red-900/30 rounded p-3 max-h-64 overflow-y-auto space-y-1">
+                                {fp.slice(0, 20).map((triple, idx) => (
+                                  <div key={idx} className="text-xs text-gray-300 font-mono">
+                                    <span className="text-blue-400">({triple[0]}</span>
+                                    <span className="text-gray-500">, </span>
+                                    <span className="text-purple-400">{triple[1]}</span>
+                                    <span className="text-gray-500">, </span>
+                                    <span className="text-green-400">{triple[2]}</span>
+                                    <span className="text-gray-500">)</span>
+                                  </div>
+                                ))}
+                                {fp.length > 20 && (
+                                  <p className="text-xs text-gray-500 italic">
+                                    ... and {fp.length - 20} more
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* First 20 False Negatives */}
+                          {fn.length > 0 && (
+                            <div>
+                              <h4 className="text-xs font-medium text-yellow-400 mb-2">
+                                False Negatives (First 20 of {fn.length})
+                              </h4>
+                              <div className="bg-gray-950 border border-yellow-900/30 rounded p-3 max-h-64 overflow-y-auto space-y-1">
+                                {fn.slice(0, 20).map((triple, idx) => (
+                                  <div key={idx} className="text-xs text-gray-300 font-mono">
+                                    <span className="text-blue-400">({triple[0]}</span>
+                                    <span className="text-gray-500">, </span>
+                                    <span className="text-purple-400">{triple[1]}</span>
+                                    <span className="text-gray-500">, </span>
+                                    <span className="text-green-400">{triple[2]}</span>
+                                    <span className="text-gray-500">)</span>
+                                  </div>
+                                ))}
+                                {fn.length > 20 && (
+                                  <p className="text-xs text-gray-500 italic">
+                                    ... and {fn.length - 20} more
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
