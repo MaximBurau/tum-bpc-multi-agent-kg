@@ -30,6 +30,14 @@ interface Entity {
 interface ExtractionResult {
   entities: Entity[];
   triples: Triple[];
+  raw_llm_output?: {
+    model?: string;
+    raw_content?: string;
+    thinking?: string;
+    reasoning?: string;
+    raw_message?: any;
+    [key: string]: any;
+  } | null;
 }
 
 interface GraphNode {
@@ -72,7 +80,7 @@ export default function Playground() {
     setExtractionResult(null);
 
     try {
-      const response = await apiClient.extractKnowledgeGraph(inputText);
+      const response = await apiClient.extractKnowledgeGraph(inputText, systemPrompt);
 
       if (response.error) {
         setError(response.error);
@@ -157,8 +165,8 @@ export default function Playground() {
                 <textarea
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
-                  rows={3}
-                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-gray-600 font-mono resize-none"
+                  rows={8}
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-gray-600 font-mono resize-y"
                 />
               </div>
 
@@ -253,6 +261,56 @@ export default function Playground() {
                     )}
                   </div>
                 </div>
+
+                {/* Raw LLM Output / Thinking Steps */}
+                {extractionResult.raw_llm_output && (
+                  <div className="bg-gray-900/50 border border-gray-800 rounded-md p-4">
+                    <h2 className="text-sm font-medium text-gray-300 mb-3">
+                      Raw LLM Output / Thinking Steps
+                    </h2>
+                    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                      {extractionResult.raw_llm_output.thinking && (
+                        <div className="bg-gray-900 border border-gray-800 rounded p-3">
+                          <h3 className="text-xs font-medium text-gray-400 mb-2">Thinking Steps:</h3>
+                          <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono">
+                            {extractionResult.raw_llm_output.thinking}
+                          </pre>
+                        </div>
+                      )}
+                      {extractionResult.raw_llm_output.reasoning && (
+                        <div className="bg-gray-900 border border-gray-800 rounded p-3">
+                          <h3 className="text-xs font-medium text-gray-400 mb-2">Reasoning:</h3>
+                          <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono">
+                            {extractionResult.raw_llm_output.reasoning}
+                          </pre>
+                        </div>
+                      )}
+                      {extractionResult.raw_llm_output.raw_content && (
+                        <div className="bg-gray-900 border border-gray-800 rounded p-3">
+                          <h3 className="text-xs font-medium text-gray-400 mb-2">Raw Content:</h3>
+                          <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono">
+                            {extractionResult.raw_llm_output.raw_content}
+                          </pre>
+                        </div>
+                      )}
+                      {extractionResult.raw_llm_output.model && (
+                        <div className="text-xs text-gray-500">
+                          Model: {extractionResult.raw_llm_output.model}
+                        </div>
+                      )}
+                      {(!extractionResult.raw_llm_output.thinking && 
+                        !extractionResult.raw_llm_output.reasoning && 
+                        !extractionResult.raw_llm_output.raw_content) && (
+                        <div className="bg-gray-900 border border-gray-800 rounded p-3">
+                          <h3 className="text-xs font-medium text-gray-400 mb-2">Full Raw Response:</h3>
+                          <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono overflow-x-auto">
+                            {JSON.stringify(extractionResult.raw_llm_output, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               <div className="bg-gray-900/50 border border-gray-800 rounded-md p-12 text-center">

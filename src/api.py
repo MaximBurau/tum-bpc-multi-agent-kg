@@ -118,17 +118,21 @@ async def test_llm(request: LLMTestRequest):
 
 class ExtractionRequest(BaseModel):
     text: str
+    system_prompt: Optional[str] = None
 
 class ExtractionResponse(BaseModel):
     entities: list[dict]
     triples: list[dict]
+    raw_llm_output: Optional[dict] = None
 
 @app.post("/api/kg/extract", response_model=ExtractionResponse)
 async def extract_kg_endpoint(request: ExtractionRequest):
     """
     Extract knowledge graph from text and write to Neo4j.
     """
-    kg = kg_extract(request.text)
+    # Treat empty string as None to use default prompt
+    system_prompt = request.system_prompt if request.system_prompt and request.system_prompt.strip() else None
+    kg, raw_output = kg_extract(request.text, system_prompt=system_prompt, return_raw=True)
     
     # Write triples to Neo4j
     try:
@@ -141,7 +145,8 @@ async def extract_kg_endpoint(request: ExtractionRequest):
     
     return ExtractionResponse(
         entities=[entity.model_dump() for entity in kg.entities],
-        triples=[triple.model_dump() for triple in kg.triples]
+        triples=[triple.model_dump() for triple in kg.triples],
+        raw_llm_output=raw_output
     )
 
 @app.post("/api/kg/extract/triples", response_model=ExtractionResponse)
@@ -187,12 +192,13 @@ async def get_knowledge_graph():
 # Pipeline Runner Endpoints
 
 class PipelineRunRequest(BaseModel):
-    task_type: str  # "qa" or "ner"
+    task_type: str  # "qa" or "ner" or "intrinsic_eval"
     prompt: Optional[str] = None
     system_prompt: Optional[str] = None
     model: Optional[str] = None
     limit: Optional[int] = None
     tags: Optional[List[str]] = None
+    flow_id: Optional[int] = None  # For intrinsic_eval: use flow instead of agent
 
 class PipelineRunResponse(BaseModel):
     run_id: int
@@ -200,6 +206,7 @@ class PipelineRunResponse(BaseModel):
     metrics: Dict[str, Any]
     duration_seconds: float
     num_examples: int
+    outputs: Optional[Dict[str, Any]] = None
 
 @app.post("/api/pipeline/run", response_model=PipelineRunResponse)
 async def run_pipeline(request: PipelineRunRequest):
@@ -209,6 +216,7 @@ async def run_pipeline(request: PipelineRunRequest):
     """
     try:
         start_time = time.time()
+        outputs = None
         
         if request.task_type == "qa":
             from src.eval.squad import evaluate_squad
@@ -218,21 +226,56 @@ async def run_pipeline(request: PipelineRunRequest):
             from src.eval.conll2003_ner import evaluate_conll2003_ner
             metrics = evaluate_conll2003_ner(limit=request.limit)
             num_examples = metrics.get("num_examples", 0)
+        elif request.task_type == "intrinsic_eval":
+            from src.eval.redocred import evaluate_redocred_re
+            result = await evaluate_redocred_re(
+                limit=request.limit,
+                return_details=True,
+                flow_id=request.flow_id
+            )
+            # Separate metrics from detailed outputs
+            metrics = {k: v for k, v in result.items() if k != "doc_details"}
+            num_examples = request.limit if request.limit else metrics.get("num_docs", 0)
+            # Store detailed outputs separately
+            outputs = {"doc_details": result.get("doc_details", [])}
         else:
             raise HTTPException(status_code=400, detail=f"Unknown task type: {request.task_type}")
         
         duration = time.time() - start_time
         
-        # Store run in database
-        run_id = run_db.insert_run(
+        # Determine model field: if flow_id is provided, use flow name instead of model
+        model_to_store = request.model
+        if request.task_type == "intrinsic_eval" and request.flow_id:
+            # Fetch flow name to display in model column
+            from src.db import get_session
+            from src.models import Flow
+            import asyncio
+            
+            def _get_flow_name():
+                sess = get_session()
+                try:
+                    flow = sess.query(Flow).filter_by(id=request.flow_id).first()
+                    return flow.name if flow else None
+                finally:
+                    sess.close()
+            
+            flow_name = await asyncio.to_thread(_get_flow_name)
+            if flow_name:
+                model_to_store = flow_name
+        
+        # Store run in database (non-blocking)
+        import asyncio
+        run_id = await asyncio.to_thread(
+            run_db.insert_run,
             task_type=request.task_type,
             metrics=metrics,
             prompt=request.prompt,
             system_prompt=request.system_prompt,
-            model=request.model,
+            model=model_to_store,
             duration_seconds=duration,
             num_examples=num_examples,
             tags=request.tags,
+            outputs=outputs,
         )
         
         return PipelineRunResponse(
@@ -241,6 +284,7 @@ async def run_pipeline(request: PipelineRunRequest):
             metrics=metrics,
             duration_seconds=duration,
             num_examples=num_examples,
+            outputs=outputs,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
