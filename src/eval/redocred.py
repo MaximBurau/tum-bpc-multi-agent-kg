@@ -124,7 +124,7 @@ def load_rel_info() -> Dict[str, str]:
         return json.load(f)
 
 
-def build_gold_triples(doc: Dict[str, Any]) -> Set[Tuple[str, str, str]]:
+def build_gold_triples(doc: Dict[str, Any], rel_info: Optional[Dict[str, str]] = None) -> Set[Tuple[str, str, str]]:
     """
     Convert a Re-DocRED document into a set of gold triples:
 
@@ -134,6 +134,14 @@ def build_gold_triples(doc: Dict[str, Any]) -> Set[Tuple[str, str, str]]:
       - Each entry in vertexSet is an entity cluster (coref).
       - We take the *first* mention in the cluster as the canonical form.
       - labels[i] gives: h (head idx), t (tail idx), r (relation id string).
+      - If rel_info is provided, converts relation IDs to human-readable names.
+    
+    Args:
+        doc: Re-DocRED document
+        rel_info: Optional mapping from relation ID to human-readable name (e.g., {"P27": "country of citizenship"})
+    
+    Returns:
+        Set of (subject, relation, object) triples with human-readable relations if rel_info provided
     """
     vertex_set = doc["vertexSet"]
     labels = doc.get("labels", [])
@@ -165,7 +173,13 @@ def build_gold_triples(doc: Dict[str, Any]) -> Set[Tuple[str, str, str]]:
         if not subj or not obj:
             continue
 
-        gold_triples.add((subj, r, obj))
+        # Convert relation ID to human-readable name if rel_info provided
+        if rel_info and r in rel_info:
+            relation_name = rel_info[r]
+        else:
+            relation_name = r  # Fallback to ID if mapping not found
+
+        gold_triples.add((subj, relation_name, obj))
 
     return gold_triples
 
@@ -315,6 +329,10 @@ def _kgprediction_to_triples(
         subj = _normalize_text(subj_name)
         obj = _normalize_text(obj_name)
         pred = rel.relation_id.strip()
+        
+        # Convert relation ID to human-readable name if rel_info provided
+        # Note: This is for the entity-based path, rel_info would need to be passed through
+        # For now, we'll handle this in the calling function
 
         if not subj or not obj or not pred:
             continue
@@ -331,12 +349,17 @@ def _kgprediction_to_triples(
 def _flow_output_to_triples(
     flow_output: Dict[str, Any],
     relation_labels: List[str],
+    rel_info: Optional[Dict[str, str]] = None,
 ) -> List[Tuple[str, str, str]]:
     """
     Convert flow output (from LangGraph state) to triples.
     
     Flow output should have 'entities' and 'relations' keys matching KGPrediction structure.
     This function handles both Pydantic models and dict representations.
+    
+    Supports multiple relation formats:
+    - PredictedRelation format: head_entity_id, tail_entity_id, relation_id
+    - Simple triple format: subject/predicate/object or head/relation/tail
     
     Args:
         flow_output: Dict from flow execution with 'entities' and 'relations' keys
@@ -345,6 +368,13 @@ def _flow_output_to_triples(
     Returns:
         List of (subject, relation_id, object) triples
     """
+    # Debug: Print flow output structure
+    print(f"[DEBUG] Flow output keys: {list(flow_output.keys())}")
+    print(f"[DEBUG] Relations data type: {type(flow_output.get('relations', []))}")
+    print(f"[DEBUG] Relations data length: {len(flow_output.get('relations', []))}")
+    if flow_output.get('relations'):
+        print(f"[DEBUG] First relation sample: {flow_output['relations'][0] if len(flow_output['relations']) > 0 else 'N/A'}")
+    
     # Extract entities and relations from flow output
     # Flow output might have them directly or nested
     entities_data = flow_output.get("entities", [])
@@ -370,21 +400,119 @@ def _flow_output_to_triples(
             # Already a Pydantic model
             entities.append(e)
     
+    # Check if relations are in simple triple format (subject/predicate/object or head/relation/tail)
+    # If so, we can convert them directly without needing entity mapping
+    if relations_data and isinstance(relations_data[0], dict):
+        first_rel = relations_data[0]
+        if "subject" in first_rel or ("head" in first_rel and "relation" in first_rel):
+            # Simple triple format - convert directly
+            print(f"[DEBUG] Detected simple triple format (subject/predicate/object or head/relation/tail)")
+            triples = []
+            for r in relations_data:
+                if isinstance(r, dict):
+                    subject = r.get("subject") or r.get("head", "")
+                    predicate = r.get("predicate") or r.get("relation", "")
+                    obj = r.get("object") or r.get("tail", "")
+                    
+                    if subject and predicate and obj:
+                        # Convert relation ID to human-readable name if rel_info provided and predicate is an ID
+                        if rel_info and predicate in rel_info:
+                            predicate = rel_info[predicate]
+                        
+                        # Normalize and create triple
+                        triple = (_normalize_text(subject), predicate.strip(), _normalize_text(obj))
+                        triples.append(triple)
+            
+            print(f"[DEBUG] Converted {len(triples)} triples from simple format")
+            return triples
+    
+    # Otherwise, use the entity-based conversion
     relations = []
     for r in relations_data:
         if isinstance(r, dict):
-            relations.append(PredictedRelation(
-                head_entity_id=r.get("head_entity_id", ""),
-                tail_entity_id=r.get("tail_entity_id", ""),
-                relation_id=r.get("relation_id", ""),
-                evidence_sentences=r.get("evidence_sentences", [])
-            ))
+            # Check if it's in simple triple format (subject/predicate/object or head/relation/tail)
+            if "subject" in r or "head" in r:
+                # Simple triple format - convert to PredictedRelation format
+                # Extract subject/head and object/tail
+                subject = r.get("subject") or r.get("head", "")
+                predicate = r.get("predicate") or r.get("relation", "")
+                obj = r.get("object") or r.get("tail", "")
+                
+                # For simple triples, we need to match entities by name
+                # Find entity IDs that match the subject and object
+                subject_entity_id = None
+                object_entity_id = None
+                
+                for entity in entities:
+                    entity_name = entity.canonical_name if hasattr(entity, 'canonical_name') else entity.get("canonical_name", "")
+                    if not entity_name and hasattr(entity, 'mentions') and entity.mentions:
+                        entity_name = entity.mentions[0].text if hasattr(entity.mentions[0], 'text') else entity.mentions[0].get("text", "")
+                    
+                    # Normalize for comparison
+                    if _normalize_text(entity_name) == _normalize_text(subject):
+                        subject_entity_id = entity.entity_id if hasattr(entity, 'entity_id') else entity.get("entity_id", "")
+                    if _normalize_text(entity_name) == _normalize_text(obj):
+                        object_entity_id = entity.entity_id if hasattr(entity, 'entity_id') else entity.get("entity_id", "")
+                
+                # If we found matching entities, create PredictedRelation
+                if subject_entity_id and object_entity_id:
+                    relations.append(PredictedRelation(
+                        head_entity_id=subject_entity_id,
+                        tail_entity_id=object_entity_id,
+                        relation_id=predicate,
+                        evidence_sentences=[]
+                    ))
+                else:
+                    # If no matching entities, create temporary entity IDs
+                    # This allows the triple to be converted even without full entity mapping
+                    temp_subj_id = f"temp_subj_{subject}"
+                    temp_obj_id = f"temp_obj_{obj}"
+                    
+                    # Add temporary entities if they don't exist
+                    if not any(e.entity_id == temp_subj_id if hasattr(e, 'entity_id') else e.get("entity_id") == temp_subj_id for e in entities):
+                        entities.append(PredictedEntity(
+                            entity_id=temp_subj_id,
+                            type="MISC",
+                            canonical_name=subject,
+                            mentions=[PredictedMention(text=subject, sent_id=0)]
+                        ))
+                    if not any(e.entity_id == temp_obj_id if hasattr(e, 'entity_id') else e.get("entity_id") == temp_obj_id for e in entities):
+                        entities.append(PredictedEntity(
+                            entity_id=temp_obj_id,
+                            type="MISC",
+                            canonical_name=obj,
+                            mentions=[PredictedMention(text=obj, sent_id=0)]
+                        ))
+                    
+                    relations.append(PredictedRelation(
+                        head_entity_id=temp_subj_id,
+                        tail_entity_id=temp_obj_id,
+                        relation_id=predicate,
+                        evidence_sentences=[]
+                    ))
+            else:
+                # Standard PredictedRelation format
+                relations.append(PredictedRelation(
+                    head_entity_id=r.get("head_entity_id", ""),
+                    tail_entity_id=r.get("tail_entity_id", ""),
+                    relation_id=r.get("relation_id", ""),
+                    evidence_sentences=r.get("evidence_sentences", [])
+                ))
         else:
             relations.append(r)
     
     # Create KGPrediction and use existing conversion function
     pred_kg = KGPrediction(entities=entities, relations=relations)
-    return _kgprediction_to_triples(pred_kg, relation_labels)
+    triples = _kgprediction_to_triples(pred_kg, relation_labels)
+    
+    # Convert relation IDs to human-readable names if rel_info provided
+    if rel_info:
+        triples = [
+            (subj, rel_info.get(pred, pred), obj)  # Use human-readable name if available, else keep original
+            for subj, pred, obj in triples
+        ]
+    
+    return triples
 
 
 async def extract_relations_with_agent(
@@ -510,8 +638,8 @@ async def evaluate_redocred_re(
         async def process_document(doc_idx: int, doc: Dict[str, Any]) -> Dict[str, Any]:
             """Process a single document and return its results."""
             try:
-                # 1) Build gold triples
-                gold_triples = build_gold_triples(doc)
+                # 1) Build gold triples (with human-readable relation names)
+                gold_triples = build_gold_triples(doc, rel_info=rel_info)
                 
                 # 2) Reconstruct plain text
                 sents = doc["sents"]
@@ -531,8 +659,8 @@ async def evaluate_redocred_re(
                     # Extract output from flow result
                     flow_output = result.get("output", {})
                     
-                    # Convert flow output to triples
-                    pred_triples_list = _flow_output_to_triples(flow_output, all_rel_labels)
+                    # Convert flow output to triples (with human-readable relation names)
+                    pred_triples_list = _flow_output_to_triples(flow_output, all_rel_labels, rel_info=rel_info)
                     error_message = None
                     
                 except Exception as e:
@@ -668,7 +796,7 @@ async def evaluate_redocred_re(
 
     for doc_idx, doc in enumerate(docs):
         # 1) Build gold triples
-        gold_triples = build_gold_triples(doc)
+        gold_triples = build_gold_triples(doc, rel_info=rel_info)
 
         # 2) Reconstruct plain text
         sents = doc["sents"]
