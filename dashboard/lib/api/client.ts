@@ -141,6 +141,13 @@ class APIClient {
     });
   }
 
+  async renameAgentType(agentName: string, newName: string): Promise<APIResponse<{ id: number; old_name: string; new_name: string; python_class: string }>> {
+    return this.request(`/api/agents/${agentName}/rename`, {
+      method: 'PUT',
+      body: JSON.stringify({ new_name: newName }),
+    });
+  }
+
   async getAgentVersions(agentName: string): Promise<APIResponse<{ agent_type: string; versions: AgentVersion[] }>> {
     return this.request(`/api/agents/${agentName}/versions`, { method: 'GET' });
   }

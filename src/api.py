@@ -9,8 +9,9 @@ Provides REST API endpoints for:
 - Run history
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from src.llm import LLMClient
@@ -24,6 +25,36 @@ import time
 init_db()
 
 app = FastAPI(title="Multi-Agent KG API")
+
+# Exception handler for Pydantic validation errors
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle Pydantic validation errors with detailed messages."""
+    errors = []
+    for error in exc.errors():
+        field_path = " -> ".join(str(loc) for loc in error["loc"])
+        errors.append({
+            "field": field_path,
+            "message": error["msg"],
+            "type": error["type"],
+            "input": error.get("input")
+        })
+    
+    print(f"\n{'='*80}")
+    print(f"Request validation error on {request.method} {request.url}")
+    print(f"Errors: {errors}")
+    print(f"{'='*80}\n")
+    
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "Request validation failed",
+            "message": "The request body does not match the expected format",
+            "errors": errors,
+            "hint": "Check that all required fields are provided and have the correct types"
+        }
+    )
 
 # CORS middleware for Next.js dashboard
 app.add_middleware(
@@ -433,7 +464,8 @@ AVAILABLE_MODELS = [
     #{"id": "openai/gpt-4o", "name": "GPT-4o", "provider": "OpenAI"},
     {"id": "openai/gpt-4o-mini", "name": "GPT-4o Mini", "provider": "OpenAI"},
     #{"id": "openai/gpt-4-turbo", "name": "GPT-4 Turbo", "provider": "OpenAI"},
-    #{"id": "anthropic/claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "provider": "Anthropic"},
+    #{"id": "openai/gpt-5.2-thinking", "name": "GPT-5.2 Thinking", "provider": "OpenAI"},
+    {"id": "anthropic/claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "provider": "Anthropic"},
     #{"id": "anthropic/claude-3-haiku", "name": "Claude 3 Haiku", "provider": "Anthropic"},
     {"id": "google/gemini-pro-1.5", "name": "Gemini Pro 1.5", "provider": "Google"},
     #{"id": "meta-llama/llama-3.1-70b-instruct", "name": "Llama 3.1 70B", "provider": "Meta"},
@@ -561,6 +593,57 @@ async def create_agent_type_endpoint(request: AgentTypeCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class AgentTypeRenameRequest(BaseModel):
+    new_name: str
+
+
+@app.put("/api/agents/{agent_name}/rename")
+async def rename_agent_type_endpoint(agent_name: str, request: AgentTypeRenameRequest):
+    """Rename an agent type."""
+    from src.agents.registry import update_agent_type_name, get_agent_type
+    
+    try:
+        # Check if agent exists
+        existing = get_agent_type(agent_name)
+        if not existing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent type not found: {agent_name}"
+            )
+        
+        # Validate new name
+        if not request.new_name or not request.new_name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="New name cannot be empty"
+            )
+        
+        # Rename the agent
+        try:
+            updated = update_agent_type_name(agent_name, request.new_name.strip())
+            if not updated:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Agent type not found: {agent_name}"
+                )
+            
+            return {
+                "id": updated.id,
+                "old_name": agent_name,
+                "new_name": updated.name,
+                "python_class": updated.python_class
+            }
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class AgentVersionCreate(BaseModel):
     prompt: str
     schema_json: List[Dict[str, Any]]
@@ -682,7 +765,31 @@ async def test_agent_endpoint(agent_name: str, request: AgentTestRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Enhanced error reporting for debugging
+        import traceback
+        error_type = type(e).__name__
+        error_msg = str(e)
+        full_traceback = traceback.format_exc()
+        
+        # Log to console for server-side debugging
+        print(f"\n{'='*80}")
+        print(f"ERROR in test_agent_endpoint for agent: {agent_name}")
+        print(f"Error Type: {error_type}")
+        print(f"Error Message: {error_msg}")
+        print(f"\nFull Traceback:")
+        print(full_traceback)
+        print(f"{'='*80}\n")
+        
+        # Return detailed error to client
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": error_msg,
+                "error_type": error_type,
+                "agent": agent_name,
+                "model": getattr(agent, 'model_name', 'unknown') if 'agent' in locals() else 'unknown'
+            }
+        )
 
 
 # ============================================================================
@@ -711,20 +818,107 @@ async def create_flow_endpoint(request: FlowCreate):
     from src.flow.registry import create_flow
     from src.flow.compiler import validate_flow
     from src.db import get_session
+    import traceback
+    import yaml
     
     try:
-        # Validate the flow first
+        # Validate request fields
+        if not request.name or not request.name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Flow name is required",
+                    "field": "name",
+                    "received": request.name
+                }
+            )
+        
+        if not request.yaml_definition or not request.yaml_definition.strip():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "YAML definition is required",
+                    "field": "yaml_definition",
+                    "received": "empty or whitespace only"
+                }
+            )
+        
+        # Try to parse YAML first
+        try:
+            yaml_data = yaml.safe_load(request.yaml_definition)
+            if yaml_data is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "YAML is empty or invalid",
+                        "field": "yaml_definition",
+                        "hint": "YAML must contain at least a 'version' and 'steps' field"
+                    }
+                )
+        except yaml.YAMLError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid YAML syntax",
+                    "field": "yaml_definition",
+                    "yaml_error": str(e),
+                    "hint": "Check your YAML syntax (indentation, colons, dashes, etc.)"
+                }
+            )
+        
+        # Validate the flow structure
         session = get_session()
-        validation = validate_flow(request.yaml_definition, session)
-        session.close()
+        try:
+            validation = validate_flow(request.yaml_definition, session)
+        except Exception as e:
+            session.close()
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Flow validation failed",
+                    "validation_error": str(e),
+                    "error_type": type(e).__name__,
+                    "hint": "Check that all referenced agents exist and have versions"
+                }
+            )
+        finally:
+            session.close()
         
         if not validation["valid"]:
             raise HTTPException(
                 status_code=400, 
-                detail={"message": "Invalid flow", "errors": validation["errors"]}
+                detail={
+                    "error": "Invalid flow definition",
+                    "message": "Flow validation failed",
+                    "errors": validation.get("errors", []),
+                    "warnings": validation.get("warnings", []),
+                    "hint": "Check that all steps reference valid agents with versions"
+                }
             )
         
-        flow = create_flow(request.name, request.yaml_definition)
+        # Create the flow
+        try:
+            flow = create_flow(request.name, request.yaml_definition)
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            print(f"\n{'='*80}")
+            print(f"Error creating flow: {error_type}")
+            print(f"Error message: {error_msg}")
+            print(f"Flow name: {request.name}")
+            print(f"YAML length: {len(request.yaml_definition)} chars")
+            print(traceback.format_exc())
+            print(f"{'='*80}\n")
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Failed to create flow",
+                    "error_type": error_type,
+                    "error_message": error_msg,
+                    "hint": "Check server logs for details"
+                }
+            )
+        
         return {
             "id": flow.id,
             "name": flow.name,
@@ -733,7 +927,21 @@ async def create_flow_endpoint(request: FlowCreate):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"\n{'='*80}")
+        print(f"Unexpected error in create_flow_endpoint: {error_type}")
+        print(f"Error message: {error_msg}")
+        print(traceback.format_exc())
+        print(f"{'='*80}\n")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Internal server error",
+                "error_type": error_type,
+                "error_message": error_msg
+            }
+        )
 
 
 @app.get("/api/flows/{flow_id}")
@@ -762,35 +970,186 @@ async def update_flow_endpoint(flow_id: int, request: FlowUpdate):
     from src.flow.registry import update_flow, get_flow
     from src.flow.compiler import validate_flow
     from src.db import get_session
+    import traceback
+    import yaml
+    
+    # Log incoming request for debugging
+    print(f"\n{'='*80}")
+    print(f"[update_flow_endpoint] Received PUT request for flow_id={flow_id}")
+    print(f"Request data: name={request.name}, yaml_definition length={len(request.yaml_definition) if request.yaml_definition else 0}")
+    print(f"{'='*80}\n")
     
     try:
+        print(f"[update_flow_endpoint] Step 1: Checking if flow exists...")
         # Check flow exists
         existing = get_flow(flow_id)
+        print(f"[update_flow_endpoint] Flow exists: {existing is not None}")
         if not existing:
-            raise HTTPException(status_code=404, detail="Flow not found")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "Flow not found",
+                    "flow_id": flow_id
+                }
+            )
         
+        print(f"[update_flow_endpoint] Step 2: Validating name...")
+        # Validate name if provided
+        if request.name is not None:
+            print(f"[update_flow_endpoint] Name provided: '{request.name}'")
+            if not request.name.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Flow name cannot be empty",
+                        "field": "name"
+                    }
+                )
+        
+        print(f"[update_flow_endpoint] Step 3: Validating YAML...")
         # Validate new YAML if provided
-        if request.yaml_definition:
+        if request.yaml_definition is not None:
+            print(f"[update_flow_endpoint] YAML provided, length: {len(request.yaml_definition)}")
+            if not request.yaml_definition.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "YAML definition cannot be empty",
+                        "field": "yaml_definition"
+                    }
+                )
+            
+            # Try to parse YAML first
+            print(f"[update_flow_endpoint] Step 4: Parsing YAML...")
+            print(f"[update_flow_endpoint] YAML content (first 200 chars): {request.yaml_definition[:200]}")
+            print(f"[update_flow_endpoint] YAML content (last 200 chars): {request.yaml_definition[-200:]}")
+            print(f"[update_flow_endpoint] YAML total length: {len(request.yaml_definition)}")
+            try:
+                print(f"[update_flow_endpoint] Calling yaml.safe_load()...")
+                yaml_data = yaml.safe_load(request.yaml_definition)
+                print(f"[update_flow_endpoint] yaml.safe_load() completed")
+                print(f"[update_flow_endpoint] YAML parsed successfully")
+                print(f"[update_flow_endpoint] YAML data type: {type(yaml_data)}")
+                print(f"[update_flow_endpoint] YAML data keys: {list(yaml_data.keys()) if isinstance(yaml_data, dict) else 'Not a dict'}")
+                if yaml_data is None:
+                    print(f"[update_flow_endpoint] ERROR: YAML parsed to None")
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "YAML is empty or invalid",
+                            "field": "yaml_definition",
+                            "hint": "YAML must contain at least a 'version' and 'steps' field"
+                        }
+                    )
+            except yaml.YAMLError as e:
+                print(f"[update_flow_endpoint] YAML parsing error: {type(e).__name__}: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Invalid YAML syntax",
+                        "field": "yaml_definition",
+                        "yaml_error": str(e),
+                        "hint": "Check your YAML syntax (indentation, colons, dashes, etc.)"
+                    }
+                )
+            except Exception as e:
+                print(f"[update_flow_endpoint] Unexpected error during YAML parsing: {type(e).__name__}: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "YAML parsing failed",
+                        "field": "yaml_definition",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "hint": "Check your YAML syntax"
+                    }
+                )
+            
+            # Validate the flow structure
+            print(f"[update_flow_endpoint] Step 5: Validating flow structure...")
             session = get_session()
-            validation = validate_flow(request.yaml_definition, session)
-            session.close()
+            try:
+                validation = validate_flow(request.yaml_definition, session)
+                print(f"[update_flow_endpoint] Validation result: valid={validation.get('valid')}, errors={len(validation.get('errors', []))}, warnings={len(validation.get('warnings', []))}")
+            except Exception as e:
+                session.close()
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Flow validation failed",
+                        "validation_error": str(e),
+                        "error_type": type(e).__name__,
+                        "hint": "Check that all referenced agents exist and have versions"
+                    }
+                )
+            finally:
+                session.close()
             
             if not validation["valid"]:
                 raise HTTPException(
                     status_code=400,
-                    detail={"message": "Invalid flow", "errors": validation["errors"]}
+                    detail={
+                        "error": "Invalid flow definition",
+                        "message": "Flow validation failed",
+                        "errors": validation.get("errors", []),
+                        "warnings": validation.get("warnings", []),
+                        "hint": "Check that all steps reference valid agents with versions"
+                    }
                 )
         
-        flow = update_flow(flow_id, request.name, request.yaml_definition)
-        return {
+        # Update the flow
+        print(f"[update_flow_endpoint] Step 6: Updating flow in database...")
+        try:
+            flow = update_flow(flow_id, request.name, request.yaml_definition)
+            print(f"[update_flow_endpoint] Flow updated successfully: id={flow.id}, name={flow.name}")
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            print(f"\n{'='*80}")
+            print(f"Error updating flow {flow_id}: {error_type}")
+            print(f"Error message: {error_msg}")
+            print(traceback.format_exc())
+            print(f"{'='*80}\n")
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Failed to update flow",
+                    "error_type": error_type,
+                    "error_message": error_msg,
+                    "hint": "Check server logs for details"
+                }
+            )
+        
+        print(f"[update_flow_endpoint] Step 7: Returning response...")
+        result = {
             "id": flow.id,
             "name": flow.name,
             "updated": True
         }
+        print(f"[update_flow_endpoint] Success! Returning: {result}")
+        return result
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"\n{'='*80}")
+        print(f"Unexpected error in update_flow_endpoint: {error_type}")
+        print(f"Error message: {error_msg}")
+        print(traceback.format_exc())
+        print(f"{'='*80}\n")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Internal server error",
+                "error_type": error_type,
+                "error_message": error_msg
+            }
+        )
 
 
 @app.delete("/api/flows/{flow_id}")

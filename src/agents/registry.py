@@ -276,6 +276,50 @@ def get_agent_registry(session: Optional[Session] = None) -> List[Dict[str, Any]
             session.close()
 
 
+def update_agent_type_name(
+    old_name: str,
+    new_name: str,
+    session: Optional[Session] = None
+) -> Optional[AgentType]:
+    """
+    Update an agent type's name.
+    
+    Args:
+        old_name: Current name of the agent type
+        new_name: New name for the agent type
+        session: Optional database session
+        
+    Returns:
+        Updated AgentType instance or None if not found
+        
+    Raises:
+        ValueError: If new_name already exists
+    """
+    own_session = session is None
+    if own_session:
+        session = get_session()
+    
+    try:
+        # Check if agent type exists
+        agent_type = session.query(AgentType).filter_by(name=old_name).first()
+        if not agent_type:
+            return None
+        
+        # Check if new name already exists
+        existing = session.query(AgentType).filter_by(name=new_name).first()
+        if existing and existing.id != agent_type.id:
+            raise ValueError(f"Agent type with name '{new_name}' already exists")
+        
+        # Update name
+        agent_type.name = new_name
+        session.commit()
+        session.refresh(agent_type)
+        return agent_type
+    finally:
+        if own_session:
+            session.close()
+
+
 def delete_agent_type(name: str, session: Optional[Session] = None) -> bool:
     """Delete an agent type and all its versions. Returns True if deleted."""
     own_session = session is None

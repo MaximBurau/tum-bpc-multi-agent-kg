@@ -36,6 +36,11 @@ export default function AgentsPage() {
   const [newAgentTypeName, setNewAgentTypeName] = useState("");
   const [createTypeLoading, setCreateTypeLoading] = useState(false);
   
+  // Rename agent state
+  const [renamingAgent, setRenamingAgent] = useState<string | null>(null);
+  const [newAgentName, setNewAgentName] = useState("");
+  const [renameLoading, setRenameLoading] = useState(false);
+  
   // Create version state
   const [showCreateVersion, setShowCreateVersion] = useState<string | null>(null);
   const [createVersionLoading, setCreateVersionLoading] = useState(false);
@@ -106,6 +111,25 @@ export default function AgentsPage() {
       fetchAgents();
     }
     setCreateTypeLoading(false);
+  };
+
+  const handleRenameAgent = async (oldName: string) => {
+    if (!newAgentName.trim() || newAgentName.trim() === oldName) {
+      setRenamingAgent(null);
+      setNewAgentName("");
+      return;
+    }
+    
+    setRenameLoading(true);
+    const response = await apiClient.renameAgentType(oldName, newAgentName.trim());
+    if (response.error) {
+      setError(response.error);
+    } else {
+      setRenamingAgent(null);
+      setNewAgentName("");
+      fetchAgents();
+    }
+    setRenameLoading(false);
   };
 
   const handleCreateVersion = async (agentName: string) => {
@@ -331,30 +355,80 @@ export default function AgentsPage() {
               className="bg-gray-900/50 border border-gray-800 rounded-lg overflow-hidden"
             >
               {/* Agent Header */}
-              <button
-                onClick={() => setExpandedAgent(expandedAgent === agent.name ? null : agent.name)}
-                className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-800/30 transition-colors"
-              >
-                <div className="flex items-center gap-3">
+              <div className="w-full px-4 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-3 flex-1">
                   <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-lg flex items-center justify-center">
                     <span className="text-sm font-bold text-white">
                       {agent.name.slice(0, 2).toUpperCase()}
                     </span>
                   </div>
-                  <div className="text-left">
-                    <h3 className="text-sm font-medium text-white">{agent.name}</h3>
-                    <p className="text-xs text-gray-500">
-                      {agent.versions.length} version{agent.versions.length !== 1 ? "s" : ""}
-                    </p>
-                  </div>
+                  {renamingAgent === agent.name ? (
+                    <div className="flex items-center gap-2 flex-1">
+                      <input
+                        type="text"
+                        value={newAgentName}
+                        onChange={(e) => setNewAgentName(e.target.value.toLowerCase().replace(/\s+/g, "_"))}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            handleRenameAgent(agent.name);
+                          } else if (e.key === "Escape") {
+                            setRenamingAgent(null);
+                            setNewAgentName("");
+                          }
+                        }}
+                        autoFocus
+                        className="flex-1 px-2 py-1 bg-gray-950 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <button
+                        onClick={() => handleRenameAgent(agent.name)}
+                        disabled={renameLoading || !newAgentName.trim() || newAgentName.trim() === agent.name}
+                        className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-500 disabled:opacity-50"
+                      >
+                        {renameLoading ? "..." : "Save"}
+                      </button>
+                      <button
+                        onClick={() => { setRenamingAgent(null); setNewAgentName(""); }}
+                        className="px-2 py-1 bg-gray-800 text-gray-300 text-xs rounded hover:bg-gray-700"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-left flex-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-medium text-white">{agent.name}</h3>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRenamingAgent(agent.name);
+                            setNewAgentName(agent.name);
+                          }}
+                          className="text-xs text-gray-500 hover:text-gray-400"
+                          title="Rename agent"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                      </div>
+                      <p className="text-xs text-gray-500">
+                        {agent.versions.length} version{agent.versions.length !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                  )}
                 </div>
-                <svg
-                  className={`w-5 h-5 text-gray-400 transition-transform ${expandedAgent === agent.name ? "rotate-180" : ""}`}
-                  fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                <button
+                  onClick={() => setExpandedAgent(expandedAgent === agent.name ? null : agent.name)}
+                  className="ml-2"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
+                  <svg
+                    className={`w-5 h-5 text-gray-400 transition-transform ${expandedAgent === agent.name ? "rotate-180" : ""}`}
+                    fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+              </div>
 
               {/* Expanded Content */}
               {expandedAgent === agent.name && (
