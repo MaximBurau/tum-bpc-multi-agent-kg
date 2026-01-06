@@ -41,6 +41,11 @@ export default function FlowsPage() {
     name: "",
     yaml: DEFAULT_YAML,
   });
+  
+  // Rename flow state
+  const [renamingFlow, setRenamingFlow] = useState<number | null>(null);
+  const [newFlowName, setNewFlowName] = useState("");
+  const [renameLoading, setRenameLoading] = useState(false);
 
   useEffect(() => {
     fetchFlows();
@@ -66,6 +71,25 @@ export default function FlowsPage() {
     } else {
       fetchFlows();
     }
+  };
+
+  const handleRenameFlow = async (flowId: number, oldName: string) => {
+    if (!newFlowName.trim() || newFlowName.trim() === oldName) {
+      setRenamingFlow(null);
+      setNewFlowName("");
+      return;
+    }
+    
+    setRenameLoading(true);
+    const response = await apiClient.updateFlow(flowId, { name: newFlowName.trim() });
+    if (response.error) {
+      setError(response.error);
+    } else {
+      setRenamingFlow(null);
+      setNewFlowName("");
+      fetchFlows();
+    }
+    setRenameLoading(false);
   };
 
   const handleCreate = async () => {
@@ -191,19 +215,69 @@ export default function FlowsPage() {
                       />
                     </svg>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-medium text-white">{flow.name}</h3>
-                    <div className="flex items-center gap-3 mt-0.5">
-                      <span className="text-xs text-gray-500">
-                        ID: {flow.id}
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        {flow.run_count || 0} runs
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        Created: {new Date(flow.created_at).toLocaleDateString()}
-                      </span>
-                    </div>
+                  <div className="flex-1">
+                    {renamingFlow === flow.id ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={newFlowName}
+                          onChange={(e) => setNewFlowName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              handleRenameFlow(flow.id, flow.name);
+                            } else if (e.key === "Escape") {
+                              setRenamingFlow(null);
+                              setNewFlowName("");
+                            }
+                          }}
+                          autoFocus
+                          className="flex-1 px-2 py-1 bg-gray-950 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                        <button
+                          onClick={() => handleRenameFlow(flow.id, flow.name)}
+                          disabled={renameLoading || !newFlowName.trim() || newFlowName.trim() === flow.name}
+                          className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-500 disabled:opacity-50"
+                        >
+                          {renameLoading ? "..." : "Save"}
+                        </button>
+                        <button
+                          onClick={() => { setRenamingFlow(null); setNewFlowName(""); }}
+                          className="px-2 py-1 bg-gray-800 text-gray-300 text-xs rounded hover:bg-gray-700"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-medium text-white">{flow.name}</h3>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRenamingFlow(flow.id);
+                              setNewFlowName(flow.name);
+                            }}
+                            className="text-xs text-gray-500 hover:text-gray-400"
+                            title="Rename flow"
+                          >
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-3 mt-0.5">
+                          <span className="text-xs text-gray-500">
+                            ID: {flow.id}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            {flow.run_count || 0} runs
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            Created: {new Date(flow.created_at).toLocaleDateString()}
+                          </span>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
 
