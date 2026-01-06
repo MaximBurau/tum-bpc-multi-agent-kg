@@ -429,6 +429,57 @@ async def get_agent_registry_endpoint():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class AgentTypeRenameRequest(BaseModel):
+    new_name: str
+
+
+@app.put("/api/agents/{agent_name}/rename")
+async def rename_agent_type_endpoint(agent_name: str, request: AgentTypeRenameRequest):
+    """Rename an agent type."""
+    from src.agents.registry import update_agent_type_name, get_agent_type
+    
+    try:
+        # Check if agent exists
+        existing = get_agent_type(agent_name)
+        if not existing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent type not found: {agent_name}"
+            )
+        
+        # Validate new name
+        if not request.new_name or not request.new_name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="New name cannot be empty"
+            )
+        
+        # Rename the agent
+        try:
+            updated = update_agent_type_name(agent_name, request.new_name.strip())
+            if not updated:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Agent type not found: {agent_name}"
+                )
+            
+            return {
+                "id": updated.id,
+                "old_name": agent_name,
+                "new_name": updated.name,
+                "python_class": updated.python_class
+            }
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/agents/{agent_name}/versions")
 async def get_agent_versions_endpoint(agent_name: str):
     """Get all versions of a specific agent type."""
@@ -587,57 +638,6 @@ async def create_agent_type_endpoint(request: AgentTypeCreate):
             "name": agent_type.name,
             "python_class": agent_type.python_class
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class AgentTypeRenameRequest(BaseModel):
-    new_name: str
-
-
-@app.put("/api/agents/{agent_name}/rename")
-async def rename_agent_type_endpoint(agent_name: str, request: AgentTypeRenameRequest):
-    """Rename an agent type."""
-    from src.agents.registry import update_agent_type_name, get_agent_type
-    
-    try:
-        # Check if agent exists
-        existing = get_agent_type(agent_name)
-        if not existing:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Agent type not found: {agent_name}"
-            )
-        
-        # Validate new name
-        if not request.new_name or not request.new_name.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="New name cannot be empty"
-            )
-        
-        # Rename the agent
-        try:
-            updated = update_agent_type_name(agent_name, request.new_name.strip())
-            if not updated:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Agent type not found: {agent_name}"
-                )
-            
-            return {
-                "id": updated.id,
-                "old_name": agent_name,
-                "new_name": updated.name,
-                "python_class": updated.python_class
-            }
-        except ValueError as e:
-            raise HTTPException(
-                status_code=400,
-                detail=str(e)
-            )
     except HTTPException:
         raise
     except Exception as e:
