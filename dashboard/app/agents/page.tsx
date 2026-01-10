@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { apiClient, AgentType, AgentVersion, ModelOption, SchemaField } from "@/lib/api/client";
 import SchemaEditor from "@/components/SchemaEditor";
+import ModelPicker from "@/components/llm/ModelPicker";
 
 /**
  * Agents page - Create and manage agent types and versions
@@ -467,17 +468,11 @@ export default function AgentsPage() {
                       {/* Model Selection */}
                       <div>
                         <label className="block text-xs text-gray-400 mb-1">Model</label>
-                        <select
+                        <ModelPicker
                           value={newVersion.model}
-                          onChange={(e) => setNewVersion({...newVersion, model: e.target.value})}
-                          className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        >
-                          {models.map((model) => (
-                            <option key={model.id} value={model.id}>
-                              {model.name} ({model.provider})
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(model) => setNewVersion({...newVersion, model})}
+                          models={models}
+                        />
                       </div>
 
                       {/* Schema Editor */}
@@ -608,15 +603,11 @@ export default function AgentsPage() {
                                       {/* Model */}
                                       <div>
                                         <label className="block text-xs text-gray-400 mb-1">Model</label>
-                                        <select
+                                        <ModelPicker
                                           value={editedVersion.model}
-                                          onChange={(e) => setEditedVersion({...editedVersion, model: e.target.value})}
-                                          className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                        >
-                                          {models.map((m) => (
-                                            <option key={m.id} value={m.id}>{m.name} ({m.provider})</option>
-                                          ))}
-                                        </select>
+                                          onChange={(model) => setEditedVersion({...editedVersion, model})}
+                                          models={models}
+                                        />
                                       </div>
 
                                       {/* Schema */}

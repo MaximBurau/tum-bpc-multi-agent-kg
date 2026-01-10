@@ -510,17 +510,59 @@ async def get_agent_versions_endpoint(agent_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Available models for dropdown
-AVAILABLE_MODELS = [
-    #{"id": "openai/gpt-4o", "name": "GPT-4o", "provider": "OpenAI"},
-    {"id": "openai/gpt-4o-mini", "name": "GPT-4o Mini", "provider": "OpenAI"},
-    #{"id": "openai/gpt-4-turbo", "name": "GPT-4 Turbo", "provider": "OpenAI"},
-    #{"id": "openai/gpt-5.2-thinking", "name": "GPT-5.2 Thinking", "provider": "OpenAI"},
-    {"id": "anthropic/claude-3.5-sonnet", "name": "Claude 3.5 Sonnet", "provider": "Anthropic"},
-    #{"id": "anthropic/claude-3-haiku", "name": "Claude 3 Haiku", "provider": "Anthropic"},
-    {"id": "google/gemini-pro-1.5", "name": "Gemini Pro 1.5", "provider": "Google"},
-    #{"id": "meta-llama/llama-3.1-70b-instruct", "name": "Llama 3.1 70B", "provider": "Meta"},
-]
+# Cache for OpenRouter models
+_models_cache = {"models": [], "fetched_at": None}
+CACHE_TTL_SECONDS = 3600  # 1 hour
+
+
+def _fetch_models_sync():
+    """Sync function to fetch models from OpenRouter."""
+    import requests
+    from datetime import datetime, timedelta
+
+    # Return cached if still valid
+    if _models_cache["fetched_at"] and \
+       datetime.now() - _models_cache["fetched_at"] < timedelta(seconds=CACHE_TTL_SECONDS):
+        return _models_cache["models"]
+
+    try:
+        response = requests.get(
+            "https://openrouter.ai/api/v1/models",
+            headers={"Authorization": f"Bearer {config.openrouter_api_key}"}
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        models = []
+        for model in data.get("data", []):
+            model_id = model.get("id", "")
+            name = model.get("name", model_id)
+            # Extract provider from model id (e.g., "openai/gpt-4o" -> "openai")
+            provider = model_id.split("/")[0] if "/" in model_id else "unknown"
+
+            models.append({
+                "id": model_id,
+                "name": name,
+                "provider": provider,
+            })
+
+        # Sort by provider then name
+        models.sort(key=lambda m: (m["provider"].lower(), m["name"].lower()))
+
+        _models_cache["models"] = models
+        _models_cache["fetched_at"] = datetime.now()
+
+        return models
+    except Exception as e:
+        print(f"Error fetching OpenRouter models: {e}")
+        # Return cached models if available, otherwise empty list
+        return _models_cache["models"] if _models_cache["models"] else []
+
+
+async def fetch_openrouter_models():
+    """Fetch all available models from OpenRouter API."""
+    import asyncio
+    return await asyncio.to_thread(_fetch_models_sync)
 
 
 class AgentTypeCreate(BaseModel):
@@ -530,8 +572,9 @@ class AgentTypeCreate(BaseModel):
 
 @app.get("/api/models")
 async def get_available_models():
-    """Get list of available LLM models for dropdown."""
-    return {"models": AVAILABLE_MODELS}
+    """Get list of available LLM models from OpenRouter."""
+    models = await fetch_openrouter_models()
+    return {"models": models}
 
 
 class SchemaSuggestionRequest(BaseModel):

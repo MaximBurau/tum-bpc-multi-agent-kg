@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { apiClient } from "@/lib/api/client";
+import { apiClient, ModelOption } from "@/lib/api/client";
+import ModelPicker from "@/components/llm/ModelPicker";
 
 /**
  * Pipeline Runner - Main evaluation interface
@@ -45,6 +46,16 @@ export default function PipelineRunner() {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [selectedFlowId, setSelectedFlowId] = useState<number | undefined>(undefined);
   const [loadingFlows, setLoadingFlows] = useState(false);
+  const [models, setModels] = useState<ModelOption[]>([]);
+
+  // Load models on mount
+  useEffect(() => {
+    apiClient.getModels().then((response) => {
+      if (response.data?.models) {
+        setModels(response.data.models);
+      }
+    });
+  }, []);
 
   // Load flows when intrinsic_eval is selected
   useEffect(() => {
@@ -170,17 +181,17 @@ export default function PipelineRunner() {
               <label className="text-xs font-medium text-gray-400">
                 Model
               </label>
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                disabled={taskType === "intrinsic_eval"}
-                className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-1 focus:ring-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <option value="meta-llama/Llama-3.1-8B-Instruct">Llama 3.1 8B</option>
-                <option value="openai/gpt-4o">GPT-4o</option>
-                <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
-                <option value="qwen/qwen-2.5-72b-instruct">Qwen 2.5 72B</option>
-              </select>
+              {taskType === "intrinsic_eval" ? (
+                <div className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-gray-500 opacity-50">
+                  Model set by flow
+                </div>
+              ) : (
+                <ModelPicker
+                  value={model}
+                  onChange={setModel}
+                  models={models}
+                />
+              )}
             </div>
 
             {/* Limit Input */}
