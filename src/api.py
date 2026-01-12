@@ -223,13 +223,13 @@ async def get_knowledge_graph():
 # Pipeline Runner Endpoints
 
 class PipelineRunRequest(BaseModel):
-    task_type: str  # "qa" or "ner" or "intrinsic_eval"
+    task_type: str  # "qa" or "ner" or "intrinsic_eval" or "oneke_compare"
     prompt: Optional[str] = None
     system_prompt: Optional[str] = None
     model: Optional[str] = None
     limit: Optional[int] = None
     tags: Optional[List[str]] = None
-    flow_id: Optional[int] = None  # For intrinsic_eval: use flow instead of agent
+    flow_id: Optional[int] = None  # For intrinsic_eval/oneke_compare: use flow
 
 class PipelineRunResponse(BaseModel):
     run_id: int
@@ -269,6 +269,36 @@ async def run_pipeline(request: PipelineRunRequest):
             num_examples = request.limit if request.limit else metrics.get("num_docs", 0)
             # Store detailed outputs separately
             outputs = {"doc_details": result.get("doc_details", [])}
+        elif request.task_type == "oneke_compare":
+            from src.eval.comparison import compare_with_baseline
+            if not request.flow_id:
+                raise HTTPException(status_code=400, detail="flow_id is required for oneke_compare")
+            if not request.model:
+                raise HTTPException(status_code=400, detail="model is required for oneke_compare")
+            result = await compare_with_baseline(
+                flow_id=request.flow_id,
+                model=request.model,
+                limit=request.limit or 10,
+                return_details=True,
+            )
+            # Metrics include both systems' results and comparison
+            metrics = {
+                "flow_f1": result["comparison"]["flow_f1"],
+                "oneke_f1": result["comparison"]["oneke_f1"],
+                "f1_delta": result["comparison"]["f1_delta"],
+                "winner": result["comparison"]["winner"],
+                "flow_precision": result["flow"].get("precision", 0),
+                "flow_recall": result["flow"].get("recall", 0),
+                "oneke_precision": result["oneke"].get("precision", 0),
+                "oneke_recall": result["oneke"].get("recall", 0),
+            }
+            num_examples = result.get("num_docs", request.limit or 10)
+            # Store full comparison details
+            outputs = {
+                "flow": result["flow"],
+                "oneke": result["oneke"],
+                "comparison": result["comparison"],
+            }
         else:
             raise HTTPException(status_code=400, detail=f"Unknown task type: {request.task_type}")
         

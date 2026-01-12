@@ -124,21 +124,21 @@ async def compare_with_baseline(
     return_details: bool = False,
 ) -> Dict[str, Any]:
     """
-    Compare your system against OneKE baseline on the same documents.
+    Compare flow against OneKE baseline on the same documents.
 
     Args:
-        flow_id: Flow ID for your system
+        flow_id: Flow ID to evaluate
         model: Model to use for both systems
         limit: Number of documents to evaluate
         return_details: If True, return per-document details
 
     Returns:
         {
-            "your_system": {...metrics...},
+            "flow": {...metrics...},
             "oneke": {...metrics...},
             "comparison": {
-                "f1_delta": your_f1 - oneke_f1,
-                "winner": "your_system" | "oneke" | "tie"
+                "f1_delta": flow_f1 - oneke_f1,
+                "winner": "flow" | "oneke" | "tie"
             },
             "model": model,
             "num_docs": N
@@ -155,8 +155,8 @@ async def compare_with_baseline(
 
     rel_info = load_rel_info()
 
-    # Run your system
-    your_result = await evaluate_redocred_re(
+    # Run flow
+    flow_result = await evaluate_redocred_re(
         path=path,
         limit=limit,
         return_details=return_details,
@@ -172,22 +172,22 @@ async def compare_with_baseline(
     )
 
     # Compare
-    your_f1 = your_result.get("f1", 0.0)
+    flow_f1 = flow_result.get("f1", 0.0)
     oneke_f1 = oneke_result.get("f1", 0.0)
 
-    if your_f1 > oneke_f1:
-        winner = "your_system"
-    elif oneke_f1 > your_f1:
+    if flow_f1 > oneke_f1:
+        winner = "flow"
+    elif oneke_f1 > flow_f1:
         winner = "oneke"
     else:
         winner = "tie"
 
     return {
-        "your_system": your_result,
+        "flow": flow_result,
         "oneke": oneke_result,
         "comparison": {
-            "f1_delta": your_f1 - oneke_f1,
-            "your_f1": your_f1,
+            "f1_delta": flow_f1 - oneke_f1,
+            "flow_f1": flow_f1,
             "oneke_f1": oneke_f1,
             "winner": winner,
         },
