@@ -34,7 +34,7 @@ interface Flow {
 }
 
 export default function PipelineRunner() {
-  const [taskType, setTaskType] = useState<"qa" | "ner" | "intrinsic_eval">("qa");
+  const [taskType, setTaskType] = useState<"qa" | "ner" | "intrinsic_eval" | "oneke_compare">("qa");
   const [limit, setLimit] = useState<number>(10);
   const [model, setModel] = useState<string>("meta-llama/Llama-3.1-8B-Instruct");
   const [systemPrompt, setSystemPrompt] = useState<string>("");
@@ -57,9 +57,9 @@ export default function PipelineRunner() {
     });
   }, []);
 
-  // Load flows when intrinsic_eval is selected
+  // Load flows when intrinsic_eval or oneke_compare is selected
   useEffect(() => {
-    if (taskType === "intrinsic_eval") {
+    if (taskType === "intrinsic_eval" || taskType === "oneke_compare") {
       setLoadingFlows(true);
       setFlows([]);
       setSelectedFlowId(undefined);
@@ -104,7 +104,7 @@ export default function PipelineRunner() {
         systemPrompt || undefined,
         model,
         tagsList.length > 0 ? tagsList : undefined,
-        taskType === "intrinsic_eval" ? selectedFlowId : undefined
+        (taskType === "intrinsic_eval" || taskType === "oneke_compare") ? selectedFlowId : undefined
       );
       
       if (response.error) {
@@ -172,6 +172,16 @@ export default function PipelineRunner() {
               >
                 Intrinsic Eval (ReDocRED)
               </button>
+              <button
+                onClick={() => setTaskType("oneke_compare")}
+                className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                  taskType === "oneke_compare"
+                    ? "bg-gray-700 text-white"
+                    : "bg-gray-800 text-gray-400 hover:bg-gray-750"
+                }`}
+              >
+                OneKE Comparison
+              </button>
             </div>
           </div>
 
@@ -192,6 +202,9 @@ export default function PipelineRunner() {
                   models={models}
                 />
               )}
+              {taskType === "oneke_compare" && (
+                <p className="text-xs text-gray-500">Used by OneKE baseline (flow uses its own model)</p>
+              )}
             </div>
 
             {/* Limit Input */}
@@ -210,11 +223,11 @@ export default function PipelineRunner() {
             </div>
           </div>
 
-          {/* Flow Selection for Intrinsic Eval */}
-          {taskType === "intrinsic_eval" && (
+          {/* Flow Selection for Intrinsic Eval and OneKE Comparison */}
+          {(taskType === "intrinsic_eval" || taskType === "oneke_compare") && (
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-gray-400">
-                Flow (Optional - uses default agent if not selected)
+                {taskType === "oneke_compare" ? "Flow (Required)" : "Flow (Optional - uses default agent if not selected)"}
               </label>
               <select
                 value={selectedFlowId || ""}

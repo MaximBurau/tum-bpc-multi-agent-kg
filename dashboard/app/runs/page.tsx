@@ -208,8 +208,205 @@ function RunDetailsPanel({ run, onClose }: { run: Run; onClose: () => void }) {
         </div>
       )}
 
-      {/* Outputs (for non-intrinsic evaluation tasks) */}
-      {run.outputs && run.task_type !== "intrinsic_eval" && (
+      {/* OneKE Comparison Results */}
+      {run.task_type === "oneke_compare" && run.outputs && (
+        <div className="space-y-4">
+          {/* Comparison Summary */}
+          <div className="bg-gray-900 border border-gray-800 rounded p-4">
+            <h3 className="text-sm font-medium text-gray-300 mb-3">Comparison Summary</h3>
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="bg-gray-950 rounded p-3">
+                <p className="text-xs text-gray-500 mb-1">Flow F1</p>
+                <p className="text-xl font-semibold text-blue-400">
+                  {((run.outputs as any).comparison?.flow_f1 ?? 0).toFixed(4)}
+                </p>
+              </div>
+              <div className="bg-gray-950 rounded p-3">
+                <p className="text-xs text-gray-500 mb-1">OneKE F1</p>
+                <p className="text-xl font-semibold text-purple-400">
+                  {((run.outputs as any).comparison?.oneke_f1 ?? 0).toFixed(4)}
+                </p>
+              </div>
+              <div className="bg-gray-950 rounded p-3">
+                <p className="text-xs text-gray-500 mb-1">Winner</p>
+                <p className={`text-xl font-semibold ${
+                  (run.outputs as any).comparison?.winner === "flow" ? "text-green-400" :
+                  (run.outputs as any).comparison?.winner === "oneke" ? "text-yellow-400" :
+                  "text-gray-400"
+                }`}>
+                  {(run.outputs as any).comparison?.winner === "flow" ? "Flow" :
+                   (run.outputs as any).comparison?.winner === "oneke" ? "OneKE" : "Tie"}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Side-by-side metrics */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* Flow Results */}
+            <div className="bg-gray-900 border border-blue-900/50 rounded p-4">
+              <h3 className="text-sm font-medium text-blue-400 mb-3">Flow Results</h3>
+              <div className="space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Precision:</span>
+                  <span className="text-gray-300 font-mono">{((run.outputs as any).flow?.precision ?? 0).toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Recall:</span>
+                  <span className="text-gray-300 font-mono">{((run.outputs as any).flow?.recall ?? 0).toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">F1:</span>
+                  <span className="text-gray-300 font-mono">{((run.outputs as any).flow?.f1 ?? 0).toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">TP / FP / FN:</span>
+                  <span className="text-gray-300 font-mono">
+                    {(run.outputs as any).flow?.true_positives ?? 0} / {(run.outputs as any).flow?.false_positives ?? 0} / {(run.outputs as any).flow?.false_negatives ?? 0}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* OneKE Results */}
+            <div className="bg-gray-900 border border-purple-900/50 rounded p-4">
+              <h3 className="text-sm font-medium text-purple-400 mb-3">OneKE Results</h3>
+              <div className="space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Precision:</span>
+                  <span className="text-gray-300 font-mono">{((run.outputs as any).oneke?.precision ?? 0).toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Recall:</span>
+                  <span className="text-gray-300 font-mono">{((run.outputs as any).oneke?.recall ?? 0).toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">F1:</span>
+                  <span className="text-gray-300 font-mono">{((run.outputs as any).oneke?.f1 ?? 0).toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">TP / FP / FN:</span>
+                  <span className="text-gray-300 font-mono">
+                    {(run.outputs as any).oneke?.true_positives ?? 0} / {(run.outputs as any).oneke?.false_positives ?? 0} / {(run.outputs as any).oneke?.false_negatives ?? 0}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Document-by-Document Comparison */}
+          <h3 className="text-xs font-medium text-gray-400">Document Details (Side-by-Side)</h3>
+          <div className="space-y-4 max-h-[600px] overflow-y-auto">
+            {((run.outputs as any).flow?.doc_details || []).map((flowDoc: any, idx: number) => {
+              const onekeDoc = (run.outputs as any).oneke?.doc_details?.[idx];
+              return (
+                <div key={idx} className="bg-gray-900 border border-gray-800 rounded p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-gray-300">Document #{flowDoc.doc_index}</span>
+                  </div>
+
+                  {/* Text (shared) */}
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Text:</p>
+                    <div className="bg-gray-950 border border-gray-800 rounded p-2 text-xs text-gray-300 max-h-32 overflow-y-auto">
+                      {onekeDoc?.text || flowDoc.text || "N/A"}
+                    </div>
+                  </div>
+
+                  {/* Gold Triples (shared) */}
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">
+                      Gold Triples ({onekeDoc?.gold_triples?.length || flowDoc.gold_triples?.length || 0}):
+                    </p>
+                    <div className="bg-gray-950 border border-gray-800 rounded p-2 max-h-32 overflow-y-auto space-y-1">
+                      {(onekeDoc?.gold_triples || flowDoc.gold_triples || []).slice(0, 10).map((triple: any[], tIdx: number) => (
+                        <div key={tIdx} className="text-xs text-gray-300 font-mono">
+                          <span className="text-blue-400">({triple[0]}</span>
+                          <span className="text-gray-500">, </span>
+                          <span className="text-purple-400">{triple[1]}</span>
+                          <span className="text-gray-500">, </span>
+                          <span className="text-green-400">{triple[2]})</span>
+                        </div>
+                      ))}
+                      {(onekeDoc?.gold_triples?.length || flowDoc.gold_triples?.length || 0) > 10 && (
+                        <p className="text-xs text-gray-600">... and {(onekeDoc?.gold_triples?.length || flowDoc.gold_triples?.length) - 10} more</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Side-by-side predicted triples */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Flow Predictions */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs text-blue-400">Flow Predicted ({flowDoc.predicted_triples?.length || 0}):</p>
+                        <div className="flex gap-2 text-xs">
+                          <span className="text-green-400">TP:{flowDoc.true_positives}</span>
+                          <span className="text-red-400">FP:{flowDoc.false_positives}</span>
+                          <span className="text-yellow-400">FN:{flowDoc.false_negatives}</span>
+                        </div>
+                      </div>
+                      {flowDoc.error && (
+                        <div className="bg-yellow-900/30 border border-yellow-700 rounded p-1 mb-1">
+                          <p className="text-xs text-yellow-400">⚠️ {flowDoc.error}</p>
+                        </div>
+                      )}
+                      <div className="bg-gray-950 border border-blue-900/30 rounded p-2 max-h-32 overflow-y-auto space-y-1">
+                        {flowDoc.predicted_triples?.slice(0, 10).map((triple: any[], tIdx: number) => (
+                          <div key={tIdx} className="text-xs text-gray-300 font-mono">
+                            <span className="text-blue-400">({triple[0]}</span>
+                            <span className="text-gray-500">, </span>
+                            <span className="text-purple-400">{triple[1]}</span>
+                            <span className="text-gray-500">, </span>
+                            <span className="text-green-400">{triple[2]})</span>
+                          </div>
+                        )) || <p className="text-xs text-gray-600">No predictions</p>}
+                        {(flowDoc.predicted_triples?.length || 0) > 10 && (
+                          <p className="text-xs text-gray-600">... and {flowDoc.predicted_triples.length - 10} more</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* OneKE Predictions */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs text-purple-400">OneKE Predicted ({onekeDoc?.predicted_triples?.length || 0}):</p>
+                        <div className="flex gap-2 text-xs">
+                          <span className="text-green-400">TP:{onekeDoc?.true_positives ?? 0}</span>
+                          <span className="text-red-400">FP:{onekeDoc?.false_positives ?? 0}</span>
+                          <span className="text-yellow-400">FN:{onekeDoc?.false_negatives ?? 0}</span>
+                        </div>
+                      </div>
+                      {onekeDoc?.error && (
+                        <div className="bg-yellow-900/30 border border-yellow-700 rounded p-1 mb-1">
+                          <p className="text-xs text-yellow-400">⚠️ {onekeDoc.error}</p>
+                        </div>
+                      )}
+                      <div className="bg-gray-950 border border-purple-900/30 rounded p-2 max-h-32 overflow-y-auto space-y-1">
+                        {onekeDoc?.predicted_triples?.slice(0, 10).map((triple: any[], tIdx: number) => (
+                          <div key={tIdx} className="text-xs text-gray-300 font-mono">
+                            <span className="text-blue-400">({triple[0]}</span>
+                            <span className="text-gray-500">, </span>
+                            <span className="text-purple-400">{triple[1]}</span>
+                            <span className="text-gray-500">, </span>
+                            <span className="text-green-400">{triple[2]})</span>
+                          </div>
+                        )) || <p className="text-xs text-gray-600">No predictions</p>}
+                        {(onekeDoc?.predicted_triples?.length || 0) > 10 && (
+                          <p className="text-xs text-gray-600">... and {onekeDoc.predicted_triples.length - 10} more</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Outputs (for other non-intrinsic evaluation tasks) */}
+      {run.outputs && run.task_type !== "intrinsic_eval" && run.task_type !== "oneke_compare" && (
         <div className="space-y-2">
           <h3 className="text-xs font-medium text-gray-400">Outputs</h3>
           <pre className="bg-gray-900 border border-gray-800 rounded p-3 text-xs text-gray-300 overflow-x-auto max-h-96">
@@ -359,6 +556,16 @@ export default function RunsHistory() {
               }`}
             >
               Intrinsic Eval
+            </button>
+            <button
+              onClick={() => setFilterTaskType("oneke_compare")}
+              className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                filterTaskType === "oneke_compare"
+                  ? "bg-gray-700 text-white"
+                  : "bg-gray-800 text-gray-400 hover:bg-gray-750"
+              }`}
+            >
+              OneKE Compare
             </button>
           </div>
         </div>
