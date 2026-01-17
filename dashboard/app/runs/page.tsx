@@ -131,7 +131,39 @@ function RunDetailsPanel({ run, onClose }: { run: Run; onClose: () => void }) {
         <div className="space-y-4">
           <h3 className="text-xs font-medium text-gray-400">Document Details</h3>
           <div className="space-y-4 max-h-[600px] overflow-y-auto">
-            {(run.outputs.doc_details as any[]).map((doc: any, idx: number) => (
+            {(run.outputs.doc_details as any[]).map((doc: any, idx: number) => {
+              // Compute categorized triples from predicted/gold if categorized fields are missing or empty
+              let correctPredicted = doc.correct_predicted;
+              let wronglyPredicted = doc.wrongly_predicted;
+              let missing = doc.missing;
+              
+              // If categorized fields are missing/empty but we have predicted/gold triples, compute them
+              const needsComputation = (!correctPredicted || correctPredicted.length === 0) && 
+                                      (!wronglyPredicted || wronglyPredicted.length === 0) &&
+                                      doc.predicted_triples && 
+                                      doc.gold_triples &&
+                                      Array.isArray(doc.predicted_triples) && 
+                                      Array.isArray(doc.gold_triples) &&
+                                      (doc.predicted_triples.length > 0 || doc.gold_triples.length > 0);
+              
+              if (needsComputation) {
+                const predSet = new Set(doc.predicted_triples.map((t: any[]) => JSON.stringify(t)));
+                const goldSet = new Set(doc.gold_triples.map((t: any[]) => JSON.stringify(t)));
+                
+                correctPredicted = doc.predicted_triples.filter((t: any[]) => goldSet.has(JSON.stringify(t)));
+                wronglyPredicted = doc.predicted_triples.filter((t: any[]) => !goldSet.has(JSON.stringify(t)));
+                // Only recompute missing if it's also empty, otherwise keep the existing one
+                if (!missing || missing.length === 0) {
+                  missing = doc.gold_triples.filter((t: any[]) => !predSet.has(JSON.stringify(t)));
+                }
+              }
+              
+              // Fallback to empty arrays if still undefined
+              correctPredicted = correctPredicted || [];
+              wronglyPredicted = wronglyPredicted || [];
+              missing = missing || [];
+              
+              return (
               <div key={idx} className="bg-gray-900 border border-gray-800 rounded p-3 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-gray-300">Document #{doc.doc_index}</span>
@@ -162,11 +194,11 @@ function RunDetailsPanel({ run, onClose }: { run: Run; onClose: () => void }) {
                   {/* Correctly Predicted Triples */}
                   <div className="space-y-2">
                     <h4 className="text-xs font-semibold text-green-400">
-                      ✓ Correctly Predicted ({doc.correct_predicted?.length || 0})
+                      ✓ Correctly Predicted ({correctPredicted?.length || 0})
                     </h4>
                     <div className="bg-gray-950 border border-green-900/30 rounded p-3 min-h-[200px] max-h-[400px] overflow-y-auto space-y-2">
-                      {doc.correct_predicted && doc.correct_predicted.length > 0 ? (
-                        doc.correct_predicted.map((triple: any[], tIdx: number) => (
+                      {correctPredicted && correctPredicted.length > 0 ? (
+                        correctPredicted.map((triple: any[], tIdx: number) => (
                           <div key={tIdx} className="text-xs text-gray-300 font-mono bg-gray-900/50 p-2 rounded border border-gray-800">
                             <span className="text-blue-400">({triple[0]}</span>
                             <span className="text-gray-500">, </span>
@@ -185,11 +217,11 @@ function RunDetailsPanel({ run, onClose }: { run: Run; onClose: () => void }) {
                   {/* Missing Triples */}
                   <div className="space-y-2">
                     <h4 className="text-xs font-semibold text-yellow-400">
-                      ⚠ Missing ({doc.missing?.length || 0})
+                      ⚠ Missing ({missing?.length || 0})
                     </h4>
                     <div className="bg-gray-950 border border-yellow-900/30 rounded p-3 min-h-[200px] max-h-[400px] overflow-y-auto space-y-2">
-                      {doc.missing && doc.missing.length > 0 ? (
-                        doc.missing.map((triple: any[], tIdx: number) => (
+                      {missing && missing.length > 0 ? (
+                        missing.map((triple: any[], tIdx: number) => (
                           <div key={tIdx} className="text-xs text-gray-300 font-mono bg-gray-900/50 p-2 rounded border border-gray-800">
                             <span className="text-blue-400">({triple[0]}</span>
                             <span className="text-gray-500">, </span>
@@ -208,11 +240,11 @@ function RunDetailsPanel({ run, onClose }: { run: Run; onClose: () => void }) {
                   {/* Wrongly Predicted Triples */}
                   <div className="space-y-2">
                     <h4 className="text-xs font-semibold text-red-400">
-                      ✗ Wrongly Predicted ({doc.wrongly_predicted?.length || 0})
+                      ✗ Wrongly Predicted ({wronglyPredicted?.length || 0})
                     </h4>
                     <div className="bg-gray-950 border border-red-900/30 rounded p-3 min-h-[200px] max-h-[400px] overflow-y-auto space-y-2">
-                      {doc.wrongly_predicted && doc.wrongly_predicted.length > 0 ? (
-                        doc.wrongly_predicted.map((triple: any[], tIdx: number) => (
+                      {wronglyPredicted && wronglyPredicted.length > 0 ? (
+                        wronglyPredicted.map((triple: any[], tIdx: number) => (
                           <div key={tIdx} className="text-xs text-gray-300 font-mono bg-gray-900/50 p-2 rounded border border-gray-800">
                             <span className="text-blue-400">({triple[0]}</span>
                             <span className="text-gray-500">, </span>
@@ -229,7 +261,8 @@ function RunDetailsPanel({ run, onClose }: { run: Run; onClose: () => void }) {
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

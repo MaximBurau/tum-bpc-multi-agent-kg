@@ -684,17 +684,35 @@ async def evaluate_redocred_re(
                 doc_fp = len(pred_triples - gold_triples)
                 doc_fn = len(gold_triples - pred_triples)
                 
-                return {
+                # 5) Categorize triples for display (if return_details)
+                result_dict = {
                     "doc_index": doc_idx,
                     "skipped": False,
                     "text": text if return_details else None,
-                    "predicted_triples": [list(t) for t in pred_triples_list] if return_details else pred_triples_list,
-                    "gold_triples": [list(t) for t in gold_triples] if return_details else None,
                     "true_positives": doc_tp,
                     "false_positives": doc_fp,
                     "false_negatives": doc_fn,
                     "error": error_message,
                 }
+                
+                if return_details:
+                    # Compute categorized triples
+                    correct_predicted = [list(t) for t in (pred_triples & gold_triples)]
+                    wrongly_predicted = [list(t) for t in (pred_triples - gold_triples)]
+                    missing = [list(t) for t in (gold_triples - pred_triples)]
+                    
+                    result_dict.update({
+                        "correct_predicted": correct_predicted,
+                        "wrongly_predicted": wrongly_predicted,
+                        "missing": missing,
+                        # Legacy fields for backward compatibility
+                        "predicted_triples": [list(t) for t in pred_triples_list],
+                        "gold_triples": [list(t) for t in gold_triples],
+                    })
+                else:
+                    result_dict["predicted_triples"] = pred_triples_list
+                
+                return result_dict
             except Exception as e:
                 print(f"Unexpected error processing document {doc_idx + 1}: {e}")
                 return {
@@ -723,6 +741,10 @@ async def evaluate_redocred_re(
                     doc_details.append({
                         "doc_index": result["doc_index"],
                         "text": result.get("text", ""),
+                        "correct_predicted": [],
+                        "wrongly_predicted": [],
+                        "missing": [],
+                        # Legacy fields for backward compatibility
                         "predicted_triples": [],
                         "gold_triples": [],
                         "true_positives": 0,
@@ -746,8 +768,12 @@ async def evaluate_redocred_re(
                 doc_details.append({
                     "doc_index": result["doc_index"],
                     "text": result["text"],
-                    "predicted_triples": result["predicted_triples"],
-                    "gold_triples": result["gold_triples"],
+                    "correct_predicted": result.get("correct_predicted", []),
+                    "wrongly_predicted": result.get("wrongly_predicted", []),
+                    "missing": result.get("missing", []),
+                    # Legacy fields for backward compatibility
+                    "predicted_triples": result.get("predicted_triples", []),
+                    "gold_triples": result.get("gold_triples", []),
                     "true_positives": doc_tp,
                     "false_positives": doc_fp,
                     "false_negatives": doc_fn,
