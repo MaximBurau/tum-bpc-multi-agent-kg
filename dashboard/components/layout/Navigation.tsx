@@ -13,6 +13,7 @@ const navigation = [
   { name: 'Pipeline Runner', href: '/' },
   { name: 'Flows', href: '/flows' },
   { name: 'Agents', href: '/agents' },
+  { name: 'Quick Test', href: '/test' },
   { name: 'Run History', href: '/runs' },
   { name: 'Playground', href: '/playground' },
 ];

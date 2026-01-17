@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { apiClient, Flow } from "@/lib/api/client";
 import FlowComparison from "@/components/FlowComparison";
+import FlowBuilder from "@/components/FlowBuilder";
 
 const DEFAULT_YAML = `version: 1
 steps:
@@ -37,6 +38,8 @@ export default function FlowsPage() {
   // Create flow state
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
+  const [useAdvancedMode, setUseAdvancedMode] = useState(false);
+  const [flowIsValid, setFlowIsValid] = useState(false);
   const [newFlow, setNewFlow] = useState({
     name: "",
     yaml: DEFAULT_YAML,
@@ -150,8 +153,16 @@ export default function FlowsPage() {
         {/* Create Flow Form */}
         {showCreateForm && (
           <div className="bg-gray-900/50 border border-gray-800 rounded-md p-4 space-y-4">
-            <h3 className="text-sm font-medium text-white">Create New Flow</h3>
-            
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium text-white">Create New Flow</h3>
+              <button
+                onClick={() => setUseAdvancedMode(!useAdvancedMode)}
+                className="text-xs text-gray-500 hover:text-gray-400"
+              >
+                {useAdvancedMode ? "Use Visual Builder" : "Use YAML (Advanced)"}
+              </button>
+            </div>
+
             <div className="space-y-1">
               <label className="text-xs text-gray-400">Flow Name</label>
               <input
@@ -163,26 +174,40 @@ export default function FlowsPage() {
               />
             </div>
 
-            <div className="space-y-1">
-              <label className="text-xs text-gray-400">YAML Definition</label>
-              <textarea
-                value={newFlow.yaml}
-                onChange={(e) => setNewFlow({...newFlow, yaml: e.target.value})}
-                rows={16}
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-600 font-mono resize-none"
-              />
-            </div>
+            {useAdvancedMode ? (
+              <div className="space-y-1">
+                <label className="text-xs text-gray-400">YAML Definition</label>
+                <textarea
+                  value={newFlow.yaml}
+                  onChange={(e) => setNewFlow({...newFlow, yaml: e.target.value})}
+                  rows={16}
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-600 font-mono resize-none"
+                />
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <label className="text-xs text-gray-400">Flow Steps</label>
+                <FlowBuilder
+                  onChange={(yaml) => setNewFlow(prev => ({...prev, yaml}))}
+                  onValidChange={setFlowIsValid}
+                />
+              </div>
+            )}
 
             <div className="flex gap-2">
               <button
                 onClick={handleCreate}
-                disabled={createLoading || !newFlow.name.trim()}
+                disabled={createLoading || !newFlow.name.trim() || (!useAdvancedMode && !flowIsValid)}
                 className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-500 disabled:opacity-50"
               >
                 {createLoading ? "Creating..." : "Create Flow"}
               </button>
               <button
-                onClick={() => setShowCreateForm(false)}
+                onClick={() => {
+                  setShowCreateForm(false);
+                  setNewFlow({ name: "", yaml: DEFAULT_YAML });
+                  setUseAdvancedMode(false);
+                }}
                 className="px-4 py-2 bg-gray-800 text-gray-300 text-sm rounded hover:bg-gray-700"
               >
                 Cancel
