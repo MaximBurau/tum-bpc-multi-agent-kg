@@ -827,11 +827,20 @@ async def evaluate_redocred_re(
 
         # Store per-document details if requested
         if return_details:
+            # Categorize triples for easier display
+            correct_predicted = [list(t) for t in (pred_triples & gold_triples)]  # TP
+            wrongly_predicted = [list(t) for t in (pred_triples - gold_triples)]  # FP
+            missing = [list(t) for t in (gold_triples - pred_triples)]  # FN
+            
             doc_details.append({
                 "doc_index": doc_idx,
                 "text": text,
-                "predicted_triples": [list(t) for t in pred_triples_list],  # Convert tuples to lists for JSON
-                "gold_triples": [list(t) for t in gold_triples],  # Convert tuples to lists for JSON
+                "correct_predicted": correct_predicted,
+                "wrongly_predicted": wrongly_predicted,
+                "missing": missing,
+                # Keep legacy fields for backward compatibility
+                "predicted_triples": [list(t) for t in pred_triples_list],
+                "gold_triples": [list(t) for t in gold_triples],
                 "true_positives": doc_tp,
                 "false_positives": doc_fp,
                 "false_negatives": doc_fn,

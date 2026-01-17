@@ -157,49 +157,75 @@ function RunDetailsPanel({ run, onClose }: { run: Run; onClose: () => void }) {
                   </div>
                 </div>
 
-                {/* Predicted Triples */}
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">
-                    Predicted Triples ({doc.predicted_triples?.length || 0}):
-                  </p>
-                  <div className="bg-gray-950 border border-gray-800 rounded p-2 max-h-40 overflow-y-auto space-y-1">
-                    {doc.predicted_triples && doc.predicted_triples.length > 0 ? (
-                      doc.predicted_triples.map((triple: any[], tIdx: number) => (
-                        <div key={tIdx} className="text-xs text-gray-300 font-mono">
-                          <span className="text-blue-400">({triple[0]}</span>
-                          <span className="text-gray-500">, </span>
-                          <span className="text-purple-400">{triple[1]}</span>
-                          <span className="text-gray-500">, </span>
-                          <span className="text-green-400">{triple[2]}</span>
-                          <span className="text-gray-500">)</span>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-xs text-gray-600">No predicted triples</p>
-                    )}
+                {/* Grid Layout: Correct, Missing, Wrong in 3 columns */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {/* Correctly Predicted Triples */}
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-semibold text-green-400">
+                      ✓ Correctly Predicted ({doc.correct_predicted?.length || 0})
+                    </h4>
+                    <div className="bg-gray-950 border border-green-900/30 rounded p-3 min-h-[200px] max-h-[400px] overflow-y-auto space-y-2">
+                      {doc.correct_predicted && doc.correct_predicted.length > 0 ? (
+                        doc.correct_predicted.map((triple: any[], tIdx: number) => (
+                          <div key={tIdx} className="text-xs text-gray-300 font-mono bg-gray-900/50 p-2 rounded border border-gray-800">
+                            <span className="text-blue-400">({triple[0]}</span>
+                            <span className="text-gray-500">, </span>
+                            <span className="text-purple-400">{triple[1]}</span>
+                            <span className="text-gray-500">, </span>
+                            <span className="text-green-400">{triple[2]}</span>
+                            <span className="text-gray-500">)</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-xs text-gray-600 text-center py-8">No correctly predicted triples</p>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                {/* Gold Triples */}
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">
-                    Gold Triples ({doc.gold_triples?.length || 0}):
-                  </p>
-                  <div className="bg-gray-950 border border-gray-800 rounded p-2 max-h-40 overflow-y-auto space-y-1">
-                    {doc.gold_triples && doc.gold_triples.length > 0 ? (
-                      doc.gold_triples.map((triple: any[], tIdx: number) => (
-                        <div key={tIdx} className="text-xs text-gray-300 font-mono">
-                          <span className="text-blue-400">({triple[0]}</span>
-                          <span className="text-gray-500">, </span>
-                          <span className="text-purple-400">{triple[1]}</span>
-                          <span className="text-gray-500">, </span>
-                          <span className="text-green-400">{triple[2]}</span>
-                          <span className="text-gray-500">)</span>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-xs text-gray-600">No gold triples</p>
-                    )}
+                  {/* Missing Triples */}
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-semibold text-yellow-400">
+                      ⚠ Missing ({doc.missing?.length || 0})
+                    </h4>
+                    <div className="bg-gray-950 border border-yellow-900/30 rounded p-3 min-h-[200px] max-h-[400px] overflow-y-auto space-y-2">
+                      {doc.missing && doc.missing.length > 0 ? (
+                        doc.missing.map((triple: any[], tIdx: number) => (
+                          <div key={tIdx} className="text-xs text-gray-300 font-mono bg-gray-900/50 p-2 rounded border border-gray-800">
+                            <span className="text-blue-400">({triple[0]}</span>
+                            <span className="text-gray-500">, </span>
+                            <span className="text-purple-400">{triple[1]}</span>
+                            <span className="text-gray-500">, </span>
+                            <span className="text-green-400">{triple[2]}</span>
+                            <span className="text-gray-500">)</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-xs text-gray-600 text-center py-8">No missing triples</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Wrongly Predicted Triples */}
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-semibold text-red-400">
+                      ✗ Wrongly Predicted ({doc.wrongly_predicted?.length || 0})
+                    </h4>
+                    <div className="bg-gray-950 border border-red-900/30 rounded p-3 min-h-[200px] max-h-[400px] overflow-y-auto space-y-2">
+                      {doc.wrongly_predicted && doc.wrongly_predicted.length > 0 ? (
+                        doc.wrongly_predicted.map((triple: any[], tIdx: number) => (
+                          <div key={tIdx} className="text-xs text-gray-300 font-mono bg-gray-900/50 p-2 rounded border border-gray-800">
+                            <span className="text-blue-400">({triple[0]}</span>
+                            <span className="text-gray-500">, </span>
+                            <span className="text-purple-400">{triple[1]}</span>
+                            <span className="text-gray-500">, </span>
+                            <span className="text-green-400">{triple[2]}</span>
+                            <span className="text-gray-500">)</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-xs text-gray-600 text-center py-8">No wrongly predicted triples</p>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
