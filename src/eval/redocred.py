@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Dict, Any, Tuple, Set, Optional
+from typing import List, Dict, Any, Tuple, Set, Optional, Union
 from pathlib import Path
 import json
 import string
@@ -124,7 +124,11 @@ def load_rel_info() -> Dict[str, str]:
         return json.load(f)
 
 
-def build_gold_triples(doc: Dict[str, Any], rel_info: Optional[Dict[str, str]] = None) -> Set[Tuple[str, str, str]]:
+def build_gold_triples(
+    doc: Dict[str, Any], 
+    rel_info: Optional[Dict[str, str]] = None,
+    return_original: bool = False
+) -> Union[Set[Tuple[str, str, str]], Tuple[Set[Tuple[str, str, str]], List[Tuple[str, str, str]]]]:
     """
     Convert a Re-DocRED document into a set of gold triples:
 
@@ -139,38 +143,48 @@ def build_gold_triples(doc: Dict[str, Any], rel_info: Optional[Dict[str, str]] =
     Args:
         doc: Re-DocRED document
         rel_info: Optional mapping from relation ID to human-readable name (e.g., {"P27": "country of citizenship"})
+        return_original: If True, also return original (non-normalized) triples for display
     
     Returns:
-        Set of (subject, relation, object) triples with human-readable relations if rel_info provided
+        If return_original=False: Set of normalized (subject, relation, object) triples
+        If return_original=True: Tuple of (normalized_triples_set, original_triples_list)
     """
     vertex_set = doc["vertexSet"]
     labels = doc.get("labels", [])
 
-    # Canonical entity surface forms: first mention in each cluster
-    canon_names: List[str] = []
+    # Canonical entity surface forms: first mention in each cluster (ORIGINAL format)
+    canon_names_original: List[str] = []
     for ent_cluster in vertex_set:
         if not ent_cluster:
-            canon_names.append("")
+            canon_names_original.append("")
             continue
         first_mention = ent_cluster[0]
         name = first_mention.get("name") or ""
-        canon_names.append(name)
+        canon_names_original.append(name)
 
     gold_triples: Set[Tuple[str, str, str]] = set()
+    original_triples: List[Tuple[str, str, str]] = [] if return_original else None
 
     for lab in labels:
         h = lab["h"]
         t = lab["t"]
         r = lab["r"]  # relation label / id string
 
-        if h >= len(canon_names) or t >= len(canon_names):
+        if h >= len(canon_names_original) or t >= len(canon_names_original):
             # corrupted indices; skip
             continue
 
-        subj = _normalize_text(canon_names[h])
-        obj = _normalize_text(canon_names[t])
+        subj_original = canon_names_original[h]
+        obj_original = canon_names_original[t]
 
-        if not subj or not obj:
+        if not subj_original or not obj_original:
+            continue
+
+        # Normalize for comparison
+        subj_normalized = _normalize_text(subj_original)
+        obj_normalized = _normalize_text(obj_original)
+
+        if not subj_normalized or not obj_normalized:
             continue
 
         # Convert relation ID to human-readable name if rel_info provided
@@ -179,8 +193,17 @@ def build_gold_triples(doc: Dict[str, Any], rel_info: Optional[Dict[str, str]] =
         else:
             relation_name = r  # Fallback to ID if mapping not found
 
-        gold_triples.add((subj, relation_name, obj))
+        # Add normalized triple for comparison
+        normalized_triple = (subj_normalized, relation_name, obj_normalized)
+        gold_triples.add(normalized_triple)
 
+        # Store original triple if requested
+        if return_original:
+            original_triple = (subj_original, relation_name, obj_original)
+            original_triples.append(original_triple)
+
+    if return_original:
+        return gold_triples, original_triples
     return gold_triples
 
 
@@ -285,14 +308,16 @@ def extract_relations_llm(
             raise
 
     # Convert KGPrediction to triples using shared helper function
-    triples = _kgprediction_to_triples(pred_kg, allowed_ids)
+    triples = _kgprediction_to_triples(pred_kg, allowed_ids, rel_info=None, return_original=False)
     return triples, None
 
 
 def _kgprediction_to_triples(
     pred_kg: KGPrediction,
     relation_labels: List[str],
-) -> List[Tuple[str, str, str]]:
+    rel_info: Optional[Dict[str, str]] = None,
+    return_original: bool = False,
+) -> Union[List[Tuple[str, str, str]], Tuple[List[Tuple[str, str, str]], List[Tuple[str, str, str]]]]:
     """
     Convert a KGPrediction to a list of normalized triples.
     
@@ -301,48 +326,66 @@ def _kgprediction_to_triples(
     Args:
         pred_kg: KGPrediction with entities and relations
         relation_labels: List of allowed relation IDs (for filtering)
+        rel_info: Optional mapping from relation ID to human-readable name
+        return_original: If True, also return original (non-normalized) triples
     
     Returns:
-        List of (subject, relation_id, object) triples
+        If return_original=False: List of normalized (subject, relation, object) triples
+        If return_original=True: Tuple of (normalized_triples_list, original_triples_list)
     """
     # Map entity_id -> canonical surface form
     entity_map: Dict[str, PredictedEntity] = {e.entity_id: e for e in pred_kg.entities}
-
+    
     triples: List[Tuple[str, str, str]] = []
+    original_triples: List[Tuple[str, str, str]] = [] if return_original else None
     seen: Set[Tuple[str, str, str]] = set()
     allowed_set = set(relation_labels)
-
+    
     for rel in pred_kg.relations:
         # Enforce closed-world relation set
         if rel.relation_id not in allowed_set:
             continue
-
+        
         head = entity_map.get(rel.head_entity_id)
         tail = entity_map.get(rel.tail_entity_id)
         if head is None or tail is None:
             continue
-
+        
         # Prefer canonical_name; fall back to first mention text
-        subj_name = head.canonical_name or (head.mentions[0].text if head.mentions else "")
-        obj_name = tail.canonical_name or (tail.mentions[0].text if tail.mentions else "")
-
-        subj = _normalize_text(subj_name)
-        obj = _normalize_text(obj_name)
-        pred = rel.relation_id.strip()
+        subj_name_original = head.canonical_name or (head.mentions[0].text if head.mentions else "")
+        obj_name_original = tail.canonical_name or (tail.mentions[0].text if tail.mentions else "")
+        
+        if not subj_name_original or not obj_name_original:
+            continue
+        
+        # Normalize for comparison
+        subj_normalized = _normalize_text(subj_name_original)
+        obj_normalized = _normalize_text(obj_name_original)
+        
+        if not subj_normalized or not obj_normalized:
+            continue
+        
+        pred_original = rel.relation_id.strip()
         
         # Convert relation ID to human-readable name if rel_info provided
-        # Note: This is for the entity-based path, rel_info would need to be passed through
-        # For now, we'll handle this in the calling function
-
-        if not subj or not obj or not pred:
+        if rel_info and pred_original in rel_info:
+            pred_display = rel_info[pred_original]
+        else:
+            pred_display = pred_original
+        
+        normalized_triple = (subj_normalized, pred_display, obj_normalized)
+        if normalized_triple in seen:
             continue
-
-        triple = (subj, pred, obj)
-        if triple in seen:
-            continue
-        seen.add(triple)
-        triples.append(triple)
-
+        seen.add(normalized_triple)
+        triples.append(normalized_triple)
+        
+        # Store original triple if requested
+        if return_original:
+            original_triple = (subj_name_original, pred_display, obj_name_original)
+            original_triples.append(original_triple)
+    
+    if return_original:
+        return (triples, original_triples)
     return triples
 
 
@@ -350,7 +393,8 @@ def _flow_output_to_triples(
     flow_output: Dict[str, Any],
     relation_labels: List[str],
     rel_info: Optional[Dict[str, str]] = None,
-) -> List[Tuple[str, str, str]]:
+    return_original: bool = False,
+) -> Union[List[Tuple[str, str, str]], Tuple[List[Tuple[str, str, str]], List[Tuple[str, str, str]]]]:
     """
     Convert flow output (from LangGraph state) to triples.
     
@@ -364,9 +408,12 @@ def _flow_output_to_triples(
     Args:
         flow_output: Dict from flow execution with 'entities' and 'relations' keys
         relation_labels: List of allowed relation IDs (for filtering)
+        rel_info: Optional mapping from relation ID to human-readable name
+        return_original: If True, also return original (non-normalized) triples
     
     Returns:
-        List of (subject, relation_id, object) triples
+        If return_original=False: List of normalized (subject, relation, object) triples
+        If return_original=True: Tuple of (normalized_triples_list, original_triples_list)
     """
     # Debug: Print flow output structure
     print(f"[DEBUG] Flow output keys: {list(flow_output.keys())}")
@@ -408,22 +455,35 @@ def _flow_output_to_triples(
             # Simple triple format - convert directly
             print(f"[DEBUG] Detected simple triple format (subject/predicate/object or head/relation/tail)")
             triples = []
+            original_triples = [] if return_original else None
             for r in relations_data:
                 if isinstance(r, dict):
-                    subject = r.get("subject") or r.get("head", "")
-                    predicate = r.get("predicate") or r.get("relation", "")
-                    obj = r.get("object") or r.get("tail", "")
+                    subject_original = r.get("subject") or r.get("head", "")
+                    predicate_original = r.get("predicate") or r.get("relation", "") or r.get("relation_label", "")
+                    obj_original = r.get("object") or r.get("tail", "")
                     
-                    if subject and predicate and obj:
-                        # Convert relation ID to human-readable name if rel_info provided and predicate is an ID
-                        if rel_info and predicate in rel_info:
-                            predicate = rel_info[predicate]
+                    if subject_original and predicate_original and obj_original:
+                        # Convert relation ID to human-readable name if rel_info provided
+                        if rel_info and predicate_original in rel_info:
+                            predicate_display = rel_info[predicate_original]
+                        else:
+                            predicate_display = predicate_original.strip()
                         
-                        # Normalize and create triple
-                        triple = (_normalize_text(subject), predicate.strip(), _normalize_text(obj))
-                        triples.append(triple)
+                        # Store original triple if requested
+                        if return_original:
+                            original_triples.append((subject_original, predicate_display, obj_original))
+                        
+                        # Normalize for comparison
+                        subject_normalized = _normalize_text(subject_original)
+                        obj_normalized = _normalize_text(obj_original)
+                        
+                        if subject_normalized and obj_normalized:
+                            triple = (subject_normalized, predicate_display, obj_normalized)
+                            triples.append(triple)
             
             print(f"[DEBUG] Converted {len(triples)} triples from simple format")
+            if return_original:
+                return (triples, original_triples)
             return triples
     
     # Otherwise, use the entity-based conversion
@@ -503,16 +563,12 @@ def _flow_output_to_triples(
     
     # Create KGPrediction and use existing conversion function
     pred_kg = KGPrediction(entities=entities, relations=relations)
-    triples = _kgprediction_to_triples(pred_kg, relation_labels)
-    
-    # Convert relation IDs to human-readable names if rel_info provided
-    if rel_info:
-        triples = [
-            (subj, rel_info.get(pred, pred), obj)  # Use human-readable name if available, else keep original
-            for subj, pred, obj in triples
-        ]
-    
-    return triples
+    if return_original:
+        triples, original_triples = _kgprediction_to_triples(pred_kg, relation_labels, rel_info=rel_info, return_original=True)
+        return (triples, original_triples)
+    else:
+        triples = _kgprediction_to_triples(pred_kg, relation_labels, rel_info=rel_info, return_original=False)
+        return triples
 
 
 async def extract_relations_with_agent(
@@ -520,7 +576,7 @@ async def extract_relations_with_agent(
     agent: BaseAgent,
     relation_labels: List[str],
     rel_descriptions: Optional[Dict[str, str]] = None,
-) -> Tuple[List[Tuple[str, str, str]], Optional[str]]:
+) -> Tuple[List[Tuple[str, str, str]], Optional[str], Optional[KGPrediction]]:
     """
     Extract relations from text using an agent.
     
@@ -531,11 +587,12 @@ async def extract_relations_with_agent(
         text: Document text to extract relations from
         agent: Agent that implements run() and returns KGPrediction
         relation_labels: List of allowed relation IDs (for filtering)
-        rel_descriptions: Optional relation descriptions (not used here, but kept for API consistency)
+        rel_descriptions: Optional relation descriptions (for relation name conversion)
     
     Returns:
-        Tuple of (triples_list, error_message). error_message is None if successful,
-        or a string like "Token limit reached" if the output was incomplete.
+        Tuple of (normalized_triples_list, error_message, original_kg_prediction).
+        error_message is None if successful, or a string like "Token limit reached" if the output was incomplete.
+        original_kg_prediction is the raw KGPrediction for extracting original triples.
     """
     try:
         # Call the agent - it should return a KGPrediction
@@ -549,14 +606,16 @@ async def extract_relations_with_agent(
         error_str = str(e)
         if "incomplete" in error_str.lower() or "max_tokens" in error_str.lower() or "length limit" in error_str.lower():
             print(f"Warning: Token limit reached for document. Returning empty triples.")
-            return [], "Token limit reached"
+            return [], "Token limit reached", None
         else:
             # Re-raise unexpected errors
             raise
-
-    # Convert KGPrediction to triples
-    triples = _kgprediction_to_triples(pred_kg, relation_labels)
-    return triples, None
+    
+    # Convert KGPrediction to triples (normalized for comparison)
+    triples = _kgprediction_to_triples(
+        pred_kg, relation_labels, rel_info=rel_descriptions, return_original=False
+    )
+    return triples, None, pred_kg
 
 
 async def evaluate_redocred_re(
@@ -638,8 +697,10 @@ async def evaluate_redocred_re(
         async def process_document(doc_idx: int, doc: Dict[str, Any]) -> Dict[str, Any]:
             """Process a single document and return its results."""
             try:
-                # 1) Build gold triples (with human-readable relation names)
-                gold_triples = build_gold_triples(doc, rel_info=rel_info)
+                # 1) Build gold triples (both normalized for comparison and original for display)
+                gold_triples_normalized, gold_triples_original = build_gold_triples(
+                    doc, rel_info=rel_info, return_original=True
+                )
                 
                 # 2) Reconstruct plain text
                 sents = doc["sents"]
@@ -659,8 +720,10 @@ async def evaluate_redocred_re(
                     # Extract output from flow result
                     flow_output = result.get("output", {})
                     
-                    # Convert flow output to triples (with human-readable relation names)
-                    pred_triples_list = _flow_output_to_triples(flow_output, all_rel_labels, rel_info=rel_info)
+                    # Convert flow output to triples (both normalized and original)
+                    pred_triples_normalized, pred_triples_original = _flow_output_to_triples(
+                        flow_output, all_rel_labels, rel_info=rel_info, return_original=True
+                    )
                     error_message = None
                     
                 except Exception as e:
@@ -674,22 +737,58 @@ async def evaluate_redocred_re(
                     else:
                         # For other errors, log and continue
                         print(f"Error processing document {doc_idx + 1}: {error_str}")
-                        pred_triples_list = []
+                        pred_triples_normalized = []
+                        pred_triples_original = []
                         error_message = error_str
                 
-                pred_triples = set(pred_triples_list)
+                # 5) Use normalized triples for comparison
+                pred_triples_set = set(pred_triples_normalized)
+                gold_triples_set = gold_triples_normalized
                 
-                # 4) Set-based counts
-                doc_tp = len(pred_triples & gold_triples)
-                doc_fp = len(pred_triples - gold_triples)
-                doc_fn = len(gold_triples - pred_triples)
+                # Calculate TP, FP, FN using normalized triples
+                doc_tp = len(pred_triples_set & gold_triples_set)
+                doc_fp = len(pred_triples_set - gold_triples_set)
+                doc_fn = len(gold_triples_set - pred_triples_set)
+                
+                # 6) Categorize original triples for display
+                correct_predicted = []  # TP - correctly predicted (in original format)
+                wrongly_predicted = []  # FP - wrongly predicted (in original format)
+                missing = []  # FN - missing triples (in original format)
+                
+                if return_details:
+                    # Create mapping from normalized triple to original triple
+                    pred_normalized_to_original = {}
+                    for orig_triple in pred_triples_original:
+                        norm_key = (_normalize_text(orig_triple[0]), orig_triple[1], _normalize_text(orig_triple[2]))
+                        pred_normalized_to_original[norm_key] = orig_triple
+                    
+                    gold_normalized_to_original = {}
+                    for orig_triple in gold_triples_original:
+                        norm_key = (_normalize_text(orig_triple[0]), orig_triple[1], _normalize_text(orig_triple[2]))
+                        gold_normalized_to_original[norm_key] = orig_triple
+                    
+                    # Find correct predictions (TP) - triples that match between predicted and gold
+                    for norm_triple in pred_triples_set & gold_triples_set:
+                        if norm_triple in pred_normalized_to_original:
+                            correct_predicted.append(pred_normalized_to_original[norm_triple])
+                    
+                    # Find wrong predictions (FP) - predicted but not in gold
+                    for norm_triple in pred_triples_set - gold_triples_set:
+                        if norm_triple in pred_normalized_to_original:
+                            wrongly_predicted.append(pred_normalized_to_original[norm_triple])
+                    
+                    # Find missing triples (FN) - in gold but not predicted
+                    for norm_triple in gold_triples_set - pred_triples_set:
+                        if norm_triple in gold_normalized_to_original:
+                            missing.append(gold_normalized_to_original[norm_triple])
                 
                 return {
                     "doc_index": doc_idx,
                     "skipped": False,
                     "text": text if return_details else None,
-                    "predicted_triples": [list(t) for t in pred_triples_list] if return_details else pred_triples_list,
-                    "gold_triples": [list(t) for t in gold_triples] if return_details else None,
+                    "correct_predicted": [list(t) for t in correct_predicted] if return_details else None,
+                    "wrongly_predicted": [list(t) for t in wrongly_predicted] if return_details else None,
+                    "missing": [list(t) for t in missing] if return_details else None,
                     "true_positives": doc_tp,
                     "false_positives": doc_fp,
                     "false_negatives": doc_fn,
@@ -723,8 +822,9 @@ async def evaluate_redocred_re(
                     doc_details.append({
                         "doc_index": result["doc_index"],
                         "text": result.get("text", ""),
-                        "predicted_triples": [],
-                        "gold_triples": [],
+                        "correct_predicted": [],
+                        "wrongly_predicted": [],
+                        "missing": [],
                         "true_positives": 0,
                         "false_positives": 0,
                         "false_negatives": 0,
@@ -746,8 +846,9 @@ async def evaluate_redocred_re(
                 doc_details.append({
                     "doc_index": result["doc_index"],
                     "text": result["text"],
-                    "predicted_triples": result["predicted_triples"],
-                    "gold_triples": result["gold_triples"],
+                    "correct_predicted": result["correct_predicted"],
+                    "wrongly_predicted": result["wrongly_predicted"],
+                    "missing": result["missing"],
                     "true_positives": doc_tp,
                     "false_positives": doc_fp,
                     "false_negatives": doc_fn,
@@ -795,15 +896,17 @@ async def evaluate_redocred_re(
     skipped_docs = 0  # Track documents skipped due to token limit
 
     for doc_idx, doc in enumerate(docs):
-        # 1) Build gold triples
-        gold_triples = build_gold_triples(doc, rel_info=rel_info)
+        # 1) Build gold triples (both normalized and original)
+        gold_triples_normalized, gold_triples_original = build_gold_triples(
+            doc, rel_info=rel_info, return_original=True
+        )
 
         # 2) Reconstruct plain text
         sents = doc["sents"]
         text = " ".join(" ".join(sent) for sent in sents)
 
-        # 3) Extract relations using agent
-        pred_triples_list, error_message = await extract_relations_with_agent(
+        # 3) Extract relations using agent - get both normalized triples and original KGPrediction
+        pred_triples_normalized_list, error_message, pred_kg = await extract_relations_with_agent(
             text, agent, all_rel_labels, rel_descriptions=rel_info
         )
         
@@ -813,29 +916,71 @@ async def evaluate_redocred_re(
             skipped_docs += 1
             continue  # Skip this document and move to next one (don't store any info)
         
-        pred_triples = set(pred_triples_list)
+        # Extract both normalized and original triples from KGPrediction in one call to ensure consistent ordering
+        if return_details and pred_kg:
+            pred_triples_normalized_list, pred_triples_original_list = _kgprediction_to_triples(
+                pred_kg, all_rel_labels, rel_info=rel_info, return_original=True
+            )
+        else:
+            pred_triples_original_list = []
+        
+        pred_triples_set = set(pred_triples_normalized_list)
+        gold_triples_set = gold_triples_normalized
 
         # 5) Set-based counts (only for successfully evaluated documents)
-        doc_tp = len(pred_triples & gold_triples)
-        doc_fp = len(pred_triples - gold_triples)
-        doc_fn = len(gold_triples - pred_triples)
+        doc_tp = len(pred_triples_set & gold_triples_set)
+        doc_fp = len(pred_triples_set - gold_triples_set)
+        doc_fn = len(gold_triples_set - pred_triples_set)
         
         tp += doc_tp
         fp += doc_fp
         fn += doc_fn
         num_evaluated_docs += 1  # Count this as successfully evaluated
 
+        # 6) Categorize original triples for display
+        correct_predicted = []  # TP
+        wrongly_predicted = []  # FP
+        missing = []  # FN
+        
+        if return_details:
+            # Create mapping from normalized to original
+            pred_normalized_to_original = {}
+            for i, norm_triple in enumerate(pred_triples_normalized_list):
+                if i < len(pred_triples_original_list):
+                    pred_normalized_to_original[norm_triple] = pred_triples_original_list[i]
+            
+            gold_normalized_to_original = {}
+            for orig_triple in gold_triples_original:
+                norm_key = (_normalize_text(orig_triple[0]), orig_triple[1], _normalize_text(orig_triple[2]))
+                gold_normalized_to_original[norm_key] = orig_triple
+            
+            # Find correct predictions (TP)
+            for norm_triple in pred_triples_set & gold_triples_set:
+                if norm_triple in pred_normalized_to_original:
+                    correct_predicted.append(pred_normalized_to_original[norm_triple])
+            
+            # Find wrong predictions (FP)
+            for norm_triple in pred_triples_set - gold_triples_set:
+                if norm_triple in pred_normalized_to_original:
+                    wrongly_predicted.append(pred_normalized_to_original[norm_triple])
+            
+            # Find missing triples (FN)
+            for norm_triple in gold_triples_set - pred_triples_set:
+                if norm_triple in gold_normalized_to_original:
+                    missing.append(gold_normalized_to_original[norm_triple])
+
         # Store per-document details if requested
         if return_details:
             doc_details.append({
                 "doc_index": doc_idx,
                 "text": text,
-                "predicted_triples": [list(t) for t in pred_triples_list],  # Convert tuples to lists for JSON
-                "gold_triples": [list(t) for t in gold_triples],  # Convert tuples to lists for JSON
+                "correct_predicted": [list(t) for t in correct_predicted],
+                "wrongly_predicted": [list(t) for t in wrongly_predicted],
+                "missing": [list(t) for t in missing],
                 "true_positives": doc_tp,
                 "false_positives": doc_fp,
                 "false_negatives": doc_fn,
-                "error": error_message,  # Store error message if any (should be None for successful extractions)
+                "error": error_message,
             })
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
